@@ -17,23 +17,40 @@
  * @since         CakePHP(tm) v 2.0
  * @license       MIT License (http://www.opensource.org/licenses/mit-license.php)
  */
-if (!defined('DS')) {
-    define('DS', DIRECTORY_SEPARATOR);
+/**
+ * Drop the phar stream wrapper before anything else runs.
+ *
+ * Nothing in MISP, in the vendored CakePHP or in any library loaded at runtime
+ * reads or builds a Phar - the wrapper only ever shows up as an attacker's
+ * primitive. It makes an archive behave like a directory, which is how a
+ * relocated application root reached code inside an uploaded file, and it turns
+ * every filesystem call on a caller-influenced path into an unserialize() sink.
+ * Removing it costs nothing here and closes both without relying on the callers.
+ */
+if (in_array('phar', stream_get_wrappers(), true)) {
+    stream_wrapper_unregister('phar');
 }
+
+const DS = DIRECTORY_SEPARATOR;
 $dispatcher = 'Cake' . DS . 'Console' . DS . 'ShellDispatcher.php';
 
-if (function_exists('ini_set')) {
-    $root = dirname(dirname(dirname(__FILE__)));
-    $appDir = basename(dirname(dirname(__FILE__)));
-    $install = $root . DS . $appDir . DS . 'Lib' . DS . 'cakephp' . DS . 'lib';
-    $composerInstall = $root . DS . $appDir . DS . 'Vendor' . DS . 'cakephp' . DS . 'cakephp' . DS . 'lib';
+if (function_exists('set_include_path')) {
+    $appDir = dirname(__DIR__);
+    $composerInstall = $appDir . DS . 'Vendor' . DS . 'cakephp' . DS . 'cakephp' . DS . 'lib';
 
     if (file_exists($composerInstall . DS . $dispatcher)) {
         $install = $composerInstall; // prefer compose install
+        $dispatcher = $composerInstall . DS . $dispatcher;
+    } else {
+        $install = $appDir . DS . 'Lib' . DS . 'cakephp' . DS . 'lib';
     }
 
-    ini_set('include_path', $install . PATH_SEPARATOR . ini_get('include_path'));
-    unset($root, $appDir, $install, $composerInstall);
+    set_include_path($install . PATH_SEPARATOR . get_include_path());
+    unset($appDir, $install, $composerInstall);
+}
+
+if (PHP_VERSION_ID < 80000) {
+    require_once dirname(__DIR__). DS . 'Lib' . DS . 'polyfill.php';
 }
 
 if (!include $dispatcher) {

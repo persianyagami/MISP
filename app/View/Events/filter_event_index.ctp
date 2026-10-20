@@ -10,7 +10,7 @@
                         'class' => 'input',
                         //'label' => 'Add Filtering Rule',
                         'onchange' => "indexRuleChange();",
-                        'style' => 'margin-right:3px;width:120px;',
+                        'style' => 'margin-right:3px;width:130px;',
                         'div' => false
                 ));
                 echo $this->Form->input('searchbool', array(
@@ -87,6 +87,39 @@
                         'style' => 'display:none;width:236px;',
                         'div' => false
                 ));
+
+                echo $this->Form->input('searchtimestampfrom', array(
+                    'class' => 'input',
+                    'label' => false,
+                    'style' => 'display:none;width:236px;margin-right:3px;',
+                    'div' => false,
+                    'placeholder' => __("YYYY-MM-DD HH:mm:ss")
+                ));
+
+                echo $this->Form->input('searchtimestampuntil', array(
+                    'class' => 'input',
+                    'label' => false,
+                    'style' => 'display:none;width:236px;margin-right:3px;',
+                    'div' => false,
+                    'placeholder' => __("YYYY-MM-DD HH:mm:ss")
+                ));
+
+                echo $this->Form->input('searchpublishtimestampfrom', array(
+                    'class' => 'input',
+                    'label' => false,
+                    'style' => 'display:none;width:236px;margin-right:3px;',
+                    'div' => false,
+                    'placeholder' => __("YYYY:MM:DD HH:MM:SS")
+                ));
+
+                echo $this->Form->input('searchpublishtimestampuntil', array(
+                    'class' => 'input',
+                    'label' => false,
+                    'style' => 'display:none;width:236px;margin-right:3px;',
+                    'div' => false,
+                    'placeholder' => __("YYYY:MM:DD HH:MM:SS")
+                ));
+
                 echo $this->Form->input('searcheventinfo', array(
                         'label' => false,
                         'class' => 'input-large',
@@ -120,6 +153,26 @@
                         'style' => 'display:none;width:424px;',
                         'div' => false
                 ));
+                echo $this->Form->input('searchall', array(
+                        'label' => false,
+                        'class' => 'input-large',
+                        'style' => 'display:none;width:424px;',
+                        'div' => false
+                ));
+                echo $this->Form->input('searchextending', array(
+                    'options' => array('0' => __('No'), '1' => __('Yes'), '2' => __('Any')),
+                    'class' => 'input',
+                    'label' => false,
+                    'style' => 'display:none;width:503px;',
+                    'div' => false
+                ));
+                echo $this->Form->input('searchextended', array(
+                    'options' => array('0' => __('No'), '1' => __('Yes'), '2' => __('Any')),
+                    'class' => 'input',
+                    'label' => false,
+                    'style' => 'display:none;width:503px;',
+                    'div' => false
+                ));
             ?>
             <span id="addRuleButton" class="btn btn-inverse" style="margin-bottom:10px;display:none;"><?php echo __('Add');?></span>
             </div>
@@ -134,7 +187,7 @@
                         <th style="width:10px;border:1px solid #cccccc;border-left:0px;text-align: left;"></th>
                     </tr>
                     <?php
-                        $fields = array('published', 'org', 'tag', 'date', 'eventinfo', 'eventid', 'threatlevel', 'analysis', 'distribution', 'sharinggroup', 'attribute', 'hasproposal');
+                        $fields = array('published', 'org', 'tag', 'date', 'eventinfo', 'eventid', 'threatlevel', 'analysis', 'is_extension', 'is_extended', 'distribution', 'sharinggroup', 'attribute', 'hasproposal', 'timestamp', 'publishtimestamp', 'all');
                         if ($isSiteAdmin) $fields[] = 'email';
                         foreach ($fields as $k => $field):
                     ?>
@@ -176,6 +229,8 @@ var formInfoValues = {};
 var typeArray = {
         'tag' : <?php echo $tagJSON; ?>,
         'published' : [<?php echo __('"No"');?>, "<?php echo __('Yes');?>", "<?php echo __('Any');?>"],
+        'is_extension' : [<?php echo __('"No"');?>, "<?php echo __('Yes');?>", "<?php echo __('Any');?>"],
+        'is_extended' : [<?php echo __('"No"');?>, "<?php echo __('Yes');?>", "<?php echo __('Any');?>"],
         'hasproposal' : ["<?php echo __('No');?>", "<?php echo __('Yes');?>", "<?php echo __('Any');?>"],
         'distribution' : [
                         {"id" : "0", "value" : "<?php echo __('Your organisation only');?>"},
@@ -205,15 +260,17 @@ var publishedOptions = ["<?php echo __('No');?>", "<?php echo __('Yes');?>", "<?
 
 var hasproposalOptions = ["<?php echo __('No');?>", "<?php echo __('Yes');?>", "<?php echo __('Any');?>"];
 
+var extendsOptions = ["<?php echo __('No');?>", "<?php echo __('Yes');?>", "<?php echo __('Any');?>"];
+
 var filtering = <?php echo $filtering; ?>;
 
 var operators = ["<?php echo __('OR');?>", "<?php echo __('NOT');?>"];
 
-var allFields = ["published", "tag", "date", "eventinfo", "eventid", "threatlevel", "distribution", "sharinggroup", "analysis", "attribute", "hasproposal"];
+var allFields = ["published", "tag", "date", "eventinfo", "eventid", "threatlevel", "distribution", "sharinggroup", "analysis", "attribute", "hasproposal", "timestamp", "publishtimestamp", "extending", "extended", "all"];
 
-var simpleFilters = ["tag", "eventinfo", "eventid", "threatlevel", "distribution", "sharinggroup", "analysis", "attribute"];
+var simpleFilters = ["tag", "eventinfo", "eventid", "threatlevel", "distribution", "sharinggroup", "analysis", "attribute", "all"];
 
-var differentFilters = ["published", "date", "hasproposal"];
+var differentFilters = ["published", "date", "hasproposal", "timestamp", "publishtimestamp", "extending", "extended"];
 
 var typedFields = ["tag", "threatlevel", "distribution", "analysis"];
 
@@ -240,3 +297,4 @@ $(function() {
 
 </script>
 <?php echo $this->Js->writeBuffer();
+ 

@@ -22,6 +22,16 @@ echo $this->element('genericElements/Form/genericForm', [
                 'type' => 'checkbox'
             ],
             [
+                'field' => 'Feed.settings.disable_correlation',
+                'label' => __('Disable correlation'),
+                'type' => 'checkbox'
+            ],
+            [
+                'field' => 'Feed.settings.unpublish_event',
+                'label' => __('Unpublish events'),
+                'type' => 'checkbox'
+            ],
+            [
                 'field' => 'name',
                 'label' => __('Name'),
                 'placeholder' => __('Feed name'),
@@ -68,6 +78,7 @@ echo $this->element('genericElements/Form/genericForm', [
                 'field' => 'orgc_id',
                 'label' => __('Creator organisation'),
                 'options' => $dropdownData['orgs'],
+                'value' => $this->request->params['action'] === 'add' ? $me['org_id'] : null,
                 'type' => 'dropdown',
                 'div' => ['id' => 'OrgcDiv', 'style' => 'display:none', 'class' => 'optionalField'],
                 'class' => 'form-control span6'
@@ -75,17 +86,18 @@ echo $this->element('genericElements/Form/genericForm', [
             [
                 'field' => 'fixed_event',
                 'label' => __('Target Event'),
-                'options' => ['New Event Each Pull', 'Fixed Event'],
+                'options' => [1 =>'Fixed Event', 0 => 'New Event Each Pull'],
                 'type' => 'dropdown',
                 'div' => ['id' => 'TargetDiv', 'style' => 'display:none', 'class' => 'optionalField'],
                 'class' => 'form-control span6'
             ],
             [
-                'field' => 'target_event',
+                'field' => 'event_id',
                 'label' => __('Target Event ID'),
                 'placeholder' => __('Leave blank unless you want to reuse an existing event.'),
                 'div' => ['id' => 'TargetEventDiv', 'style' => 'display:none', 'class' => 'optionalField'],
-                'class' => 'form-control span6'
+                'class' => 'form-control span6',
+                'required' => 0
             ],
             [
                 'field' => 'Feed.settings.csv.value',
@@ -107,7 +119,6 @@ echo $this->element('genericElements/Form/genericForm', [
             [
                 'field' => 'Feed.settings.common.excluderegex',
                 'label' => __('Exclusion Regex'),
-                'placeholder' => __('Leave blank unless you want to reuse an existing event.'),
                 'div' => ['id' => 'settingsCommonExcluderegexDiv', 'style' => 'display:none', 'class' => 'optionalField'],
                 'placeholder' => __('Regex pattern, for example: "/^https://myfeedurl/i'),
                 'class' => 'form-control span6'
@@ -152,6 +163,14 @@ echo $this->element('genericElements/Form/genericForm', [
                 'label' => __('Default Tag'),
                 'options' => $dropdownData['tags'],
                 'selected' => isset($entity['Feed']['tag_id']) ? $entity['Feed']['tag_id'] : '0',
+                'type' => 'dropdown',
+                'searchable' => 1
+            ],
+            [
+                'field' => 'tag_collection_id',
+                'label' => __('Default Tag Collection'),
+                'options' => $dropdownData['tag_collections'],
+                'selected' => isset($entity['Feed']['tag_collection_id']) ? $entity['Feed']['tag_collection_id'] : '0',
                 'type' => 'dropdown',
                 'searchable' => 1
             ],

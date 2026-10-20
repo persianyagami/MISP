@@ -114,7 +114,7 @@ class CakeEmailExtended extends CakeEmail
             throw new InvalidArgumentException("Expected instance of CakeEmailBody, " . gettype($this->body) . " given.");
         }
 
-        $this->_boundary = md5(uniqid());
+        $this->_boundary = md5(mt_rand());
 
         $rendered = [];
         if (!empty($this->body->text)) {
@@ -191,7 +191,7 @@ class MimeMultipart
     public function __construct($subtype = 'mixed', $additionalTypes = array())
     {
         $this->subtype = $subtype;
-        $this->boundary = md5(uniqid());
+        $this->boundary = md5(mt_rand());
         $this->additionalTypes = $additionalTypes;
     }
 
@@ -484,6 +484,10 @@ class SendEmail
             ]);
         }
 
+        if ($body instanceof SendEmailTemplate && $body->listUnsubscribe()) {
+            $email->addHeaders(['List-Unsubscribe' => "<{$body->listUnsubscribe()}>"]);
+        }
+
         $signed = false;
         if (Configure::read('GnuPG.sign')) {
             if (!$this->gpg) {
@@ -551,14 +555,18 @@ class SendEmail
         }
 
         try {
-            return [
-                'contents' => $email->send(),
-                'encrypted' => $encrypted,
-                'subject' => $subject,
-            ];
+            $content = $email->send();
         } catch (Exception $e) {
             throw new SendEmailException('The message could not be sent.', 0, $e);
         }
+
+        return [
+            'to' => $user['User']['email'],
+            'message_id' => $email->messageId(),
+            'contents' => $content,
+            'encrypted' => $encrypted,
+            'subject' => $subject,
+        ];
     }
 
     /**
@@ -974,6 +982,7 @@ class SendEmail
             $parts[] = 'prefer-encrypt=mutual';
         }
         $parts[] = 'keydata=' . base64_encode($keyData);
-        return implode('; ', $parts);
+        // Use the PHP wordwrap function to wrap the Autocrypt header to 74 (+ CRLF) to meet RFC 5322 - 2.1.1 line length limits 
+        return wordwrap(implode('; ', $parts), 74, "\r\n\t", true);
     }
 }

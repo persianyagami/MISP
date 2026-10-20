@@ -47,7 +47,7 @@ class NoticelistsController extends AppController
                         $change = $success['name'] . ' v' . $success['new'] . ' installed';
                     }
                     $this->Log->create();
-                    $this->Log->save(array(
+                    $this->Log->saveOrFailSilently(array(
                         'org' => $this->Auth->user('Organisation')['name'],
                         'model' => 'Noticelist',
                         'model_id' => $id,
@@ -63,7 +63,7 @@ class NoticelistsController extends AppController
             if (isset($result['fails'])) {
                 foreach ($result['fails'] as $id => $fail) {
                     $this->Log->create();
-                    $this->Log->save(array(
+                    $this->Log->saveOrFailSilently(array(
                         'org' => $this->Auth->user('Organisation')['name'],
                         'model' => 'Noticelist',
                         'model_id' => $id,
@@ -78,7 +78,7 @@ class NoticelistsController extends AppController
             }
         } else {
             $this->Log->create();
-            $this->Log->save(array(
+            $this->Log->saveOrFailSilently(array(
                 'org' => $this->Auth->user('Organisation')['name'],
                 'model' => 'Noticelist',
                 'model_id' => 0,
@@ -150,6 +150,7 @@ class NoticelistsController extends AppController
 
     public function enableNoticelist($id, $enable = false)
     {
+        $this->_requirePostUnlessApiKey();
         $this->Noticelist->id = $id;
         if (!$this->Noticelist->exists()) {
             throw new NotFoundException(__('Noticelist not found.'));
@@ -168,7 +169,7 @@ class NoticelistsController extends AppController
         if (!$this->request->is('ajax')) {
             throw new MethodNotAllowedException('This action is available via AJAX only.');
         }
-        $this->layout = 'ajax';
+        $this->layout = false;
         $this->render('ajax/getToggleField');
     }
 

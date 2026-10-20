@@ -19,6 +19,20 @@
  * @license       MIT License (http://www.opensource.org/licenses/mit-license.php)
  */
 /**
+ * Drop the phar stream wrapper before anything else runs.
+ *
+ * Nothing in MISP, in the vendored CakePHP or in any library loaded at runtime
+ * reads or builds a Phar - the wrapper only ever shows up as an attacker's
+ * primitive. It makes an archive behave like a directory, which is how a
+ * relocated application root reached code inside an uploaded file, and it turns
+ * every filesystem call on a caller-influenced path into an unserialize() sink.
+ * Removing it costs nothing here and closes both without relying on the callers.
+ */
+if (in_array('phar', stream_get_wrappers(), true)) {
+    stream_wrapper_unregister('phar');
+}
+
+/**
  * Use the DS to separate the directories in other defines
  */
 if (!defined('DS')) {
@@ -32,17 +46,15 @@ if (!defined('DS')) {
 
 /**
  * The full path to the directory which holds "app", WITHOUT a trailing DS.
- *
  */
 if (!defined('ROOT')) {
-	define('ROOT', dirname(dirname(dirname(__FILE__))));
+	define('ROOT', dirname(__DIR__, 2));
 }
 /**
  * The actual directory name for the "app".
- *
  */
 if (!defined('APP_DIR')) {
-	define('APP_DIR', basename(dirname(dirname(__FILE__))));
+	define('APP_DIR', basename(dirname(__DIR__)));
 }
 
 /**
@@ -73,10 +85,10 @@ if (!defined('CAKE_CORE_INCLUDE_PATH') && file_exists($vendorPath . DS . $dispat
  * Change at your own risk.
  */
 if (!defined('WEBROOT_DIR')) {
-	define('WEBROOT_DIR', basename(dirname(__FILE__)));
+	define('WEBROOT_DIR', basename(__DIR__));
 }
 if (!defined('WWW_ROOT')) {
-	define('WWW_ROOT', dirname(__FILE__) . DS);
+	define('WWW_ROOT', __DIR__ . DS);
 }
 
 if (!defined('CAKE_CORE_INCLUDE_PATH')) {
@@ -93,6 +105,12 @@ if (!defined('CAKE_CORE_INCLUDE_PATH')) {
 }
 if (!empty($failed)) {
     trigger_error("CakePHP core could not be found. Check the value of CAKE_CORE_INCLUDE_PATH in APP/webroot/index.php. It should point to the directory containing your " . DS . "cake core directory and your " . DS . "vendors root directory.", E_USER_ERROR);
+}
+
+require_once dirname(__DIR__) . '/Model/Attribute.php';   // FIXME workaround bug where Vendor/symfony/polyfill-php80/Resources/stubs/Attribute.php is loaded instead
+
+if (PHP_VERSION_ID < 80000) {
+    require_once ROOT . DS . APP_DIR . DS . 'Lib' . DS . 'polyfill.php';
 }
 
 App::uses('Dispatcher', 'Routing');

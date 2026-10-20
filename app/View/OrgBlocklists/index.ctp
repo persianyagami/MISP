@@ -32,6 +32,17 @@ echo $this->element('genericElements/IndexTable/scaffold', [
                     'data_path' => 'OrgBlocklist.comment',
                     'class' => 'bitwider'
                 ],
+                [
+                    'name' => 'Blocked amount',
+                    'sort' => 'OrgBlocklist.blocked_data.blocked_amount',
+                    'data_path' => 'OrgBlocklist.blocked_data.blocked_amount',
+                ],
+                [
+                    'name' => 'Blocked last time ',
+                    'sort' => 'OrgBlocklist.blocked_data.blocked_last_time',
+                    'data_path' => 'OrgBlocklist.blocked_data.blocked_last_time',
+                    'element' => 'datetime'
+                ],
 
             ],
             'title' => empty($ajax) ? __('Organisation Blocklists') : false,
@@ -50,6 +61,8 @@ echo $this->element('genericElements/IndexTable/scaffold', [
                     'url_params_data_paths' => array(
                         'OrgBlocklist.id'
                     ),
+                    'postLink' => true,
+                    'postLinkConfirm' => __('Are you sure you want to delete the entry?'),
                     'icon' => 'trash',
                     'title' => 'Delete Blocklist',
                 ]

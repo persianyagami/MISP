@@ -1,6 +1,6 @@
 <?php
-
 App::uses('AppModel', 'Model');
+App::uses('EncryptedValue', 'Tools');
 
 class Cerebrate extends AppModel
 {
@@ -16,16 +16,27 @@ class Cerebrate extends AppModel
 
     public $belongsTo = array(
         'Organisation' => array(
-                'className' => 'Organisation',
-                'foreignKey' => 'org_id'
+            'className' => 'Organisation',
+            'foreignKey' => 'org_id'
         )
     );
 
-    public function queryInstance($options) {
+    public function beforeSave($options = array())
+    {
+        $cerebrate = &$this->data['Server'];
+        // Encrypt authkey if plain key provided and encryption is enabled
+        if (!empty($cerebrate['authkey']) && strlen($cerebrate['authkey']) === 40) {
+            $cerebrate['authkey'] = EncryptedValue::encryptIfEnabled($cerebrate['authkey']);
+        }
+        return true;
+    }
+
+    public function queryInstance($options)
+    {
         $url = $options['cerebrate']['Cerebrate']['url'] . $options['path'];
         $url_params = [];
 
-        $HttpSocket = $this->setupHttpSocket($options['cerebrate']);
+        $HttpSocket = $this->setupHttpSocket($options['cerebrate'], null, false, 'Cerebrate');
         $request = $this->setupSyncRequest($options['cerebrate'], 'Cerebrate');
         try {
             if (!empty($options['type']) && $options['type'] === 'post') {
@@ -41,7 +52,7 @@ class Cerebrate extends AppModel
                 return json_decode($response->body, true);
             }
         } catch (SocketException $e) {
-            throw new BadRequestException(__('Something went wrong. Error returned: %s', $e->getMessage));
+            throw new BadRequestException(__('Something went wrong. Error returned: %s', $e->getMessage()));
         }
         if ($response->code === 403 || $response->code === 401) {
             throw new ForbiddenException(__('Authentication failed.'));
@@ -351,12 +362,19 @@ class Cerebrate extends AppModel
             'description' => [
                 'field' => 'description'
             ],
+            'roaming' => [
+                'field' => 'roaming',
+                'default' => true,
+            ],
         ];
         $sg = [];
         foreach ($mapping as $cerebrate_field => $field_data) {
             if (empty($sg_data[$cerebrate_field])) {
                 if (!empty($field_data['required'])) {
                     return false;
+                } else if (isset($field_data['default'])) {
+                    $sg[$field_data['field']] = $field_data['default'];
+                    continue;
                 } else {
                     continue;
                 }
@@ -368,9 +386,10 @@ class Cerebrate extends AppModel
             $sg['SharingGroupOrg'] = $sg_data['sharing_group_orgs'];
             foreach ($sg['SharingGroupOrg'] as $k => $org) {
                 if (isset($org['_joinData'])) {
+                    $sg['SharingGroupOrg'][$k]['extend'] = $org['_joinData']['extend'] ?? false;
                     unset($sg['SharingGroupOrg'][$k]['_joinData']);
                 }
-                if (!isset($org['extend'])) {
+                if (!isset($sg['SharingGroupOrg'][$k]['extend'])) {
                     $sg['SharingGroupOrg'][$k]['extend'] = false;
                 }
             }
@@ -412,5 +431,38 @@ class Cerebrate extends AppModel
             return __('The organisation could not be saved.');
         }
         return __('The retrieved data isn\'t a valid sharing group.');
+    }
+
+    /**
+     * @param string|null $old Old (or current) encryption key.
+     * @param string|null $new New encryption key. If empty, encrypted values will be decrypted.
+     * @throws Exception
+     */
+    public function reencryptAuthKeys($old, $new)
+    {
+        $cerebrates = $this->find('list', [
+            'fields' => ['Cerebrate.id', 'Cerebrate.authkey'],
+        ]);
+        $toSave = [];
+        foreach ($cerebrates as $id => $authkey) {
+            if (EncryptedValue::isEncrypted($authkey)) {
+                try {
+                    $authkey = BetterSecurity::decrypt(substr($authkey, 2), $old);
+                } catch (Exception $e) {
+                    throw new Exception("Could not decrypt auth key for Cerebrate #$id", 0, $e);
+                }
+            }
+            if (!empty($new)) {
+                $authkey = EncryptedValue::ENCRYPTED_MAGIC . BetterSecurity::encrypt($authkey, $new);
+            }
+            $toSave[] = ['Cerebrate' => [
+                'id' => $id,
+                'authkey' => $authkey,
+            ]];
+        }
+        if (empty($toSave)) {
+            return true;
+        }
+        return $this->saveMany($toSave, ['validate' => false, 'fields' => ['authkey']]);
     }
 }

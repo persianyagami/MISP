@@ -1,4 +1,8 @@
 <?php
+    echo $this->element('genericElements/assetLoader', [
+        'js' => ['doT', 'moment.min'],
+        'css' => ['analyst-data',],
+    ]);
     if(!$embedded_view) {
         echo '<div class="index">';
     }
@@ -41,7 +45,7 @@
                     )
                 )
             ),
-            'title' => sprintf(__('Event Reports %s'), !empty($event_id) ?__('for Event %s', h($event_id)) : ''),
+            'title' => __('Event Reports %s', !empty($event_id) ?__('for Event %s', h($event_id)) : ''),
             'primary_id_path' => 'EventReport.id',
             'fields' => array(
                 array(
@@ -53,11 +57,36 @@
                     'url' => $baseurl . '/eventReports/view/%s'
                 ),
                 array(
+                    'name' => __('Context'),
+                    'sort' => 'uuid',
+                    'class' => 'short',
+                    'data_path' => 'EventReport.uuid',
+                    'notes_data_path' => 'Note',
+                    'opinions_data_path' => 'Opinion',
+                    'relationships_data_path' => 'Relationship',
+                    'relationships_inbound_data_path' => 'RelationshipInbound',
+                    'element' => 'shortUUIDWithNotes',
+                    'object_type' => 'EventReport',
+                ),
+                array(
                     'name' => __('Name'),
                     'data_path' => 'EventReport.name',
                 ),
                 array(
+                    'name' => __('Tags'),
+                    'class' => 'short',
+                    'data_path' => 'EventReportTag',
+                    'element' => 'tags',
+                    'elementParams' => array(
+                        'searchScope' => 'taxonomy',
+                    ),
+                    'scope' => 'event_report',
+                    'addButtonOnly' => false,
+                    'id_data_path' => 'EventReport.id',
+                ),
+                array(
                     'name' => __('Event ID'),
+                    'sort' => 'event_id',
                     'class' => 'short',
                     'element' => 'links',
                     'data_path' => 'EventReport.event_id',
@@ -91,25 +120,19 @@
                     'url_params_data_paths' => array(
                         'EventReport.id'
                     ),
-                    'icon' => 'edit'
+                    'icon' => 'edit',
+                    'complex_requirement' => function (array $row) {
+                        return $this->Acl->canEditEventReport($row);
+                    }
                 ),
                 array(
                     'title' => __('Delete'),
                     'icon' => 'trash',
                     'onclick' => 'simplePopup(\'' . $baseurl . '/event_reports/delete/[onclick_params_data_path]\');',
                     'onclick_params_data_path' => 'EventReport.id',
-                    'complex_requirement' => array(
-                        'function' => function ($row, $options) {
-                            return ($options['me']['Role']['perm_site_admin'] || $options['me']['org_id'] == $options['datapath']['orgc']) && !$options['datapath']['deleted'];
-                        },
-                        'options' => array(
-                            'me' => $me,
-                            'datapath' => array(
-                                'orgc' => 'Event.orgc_id',
-                                'deleted' => 'EventReport.deleted'
-                            )
-                        )
-                    ),
+                    'complex_requirement' => function (array $row) {
+                        return $this->Acl->canEditEventReport($row) && !$row['EventReport']['deleted'];
+                    }
                 ),
                 array(
                     'title' => __('Restore report'),
@@ -118,23 +141,14 @@
                     'icon' => 'trash-restore',
                     'postLink' => true,
                     'postLinkConfirm' => __('Are you sure you want to restore the Report?'),
-                    'complex_requirement' => array(
-                        'function' => function ($row, $options) {
-                            return ($options['me']['Role']['perm_site_admin'] || $options['me']['org_id'] == $options['datapath']['orgc']) && $options['datapath']['deleted'];
-                        },
-                        'options' => array(
-                            'me' => $me,
-                            'datapath' => array(
-                                'orgc' => 'Event.orgc_id',
-                                'deleted' => 'EventReport.deleted'
-                            )
-                        )
-                    ),
+                    'complex_requirement' => function (array $row) {
+                        return $this->Acl->canEditEventReport($row) && $row['EventReport']['deleted'];
+                    }
                 ),
             )
         )
     ));
-    if(!$embedded_view) {
+    if (!$embedded_view) {
         echo '</div>';
         echo $this->element('/genericElements/SideMenu/side_menu', array('menuList' => 'eventReports', 'menuItem' => 'index'));
     }

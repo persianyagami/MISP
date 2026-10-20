@@ -28,31 +28,52 @@ class Post extends AppModel
             ),
     );
 
+    public function afterSave($created, $options = array())
+    {
+        $post = $this->data;
+        if ($this->isTriggerCallable('post-after-save')) {
+            $workflowErrors = [];
+            $logging = [
+                'model' => 'Post',
+                'action' => $created ? 'add' : 'edit',
+                'id' => $post['Post']['id'],
+            ];
+            $triggerData = $post;
+            $this->executeTrigger('post-after-save', $triggerData, $workflowErrors, $logging);
+        }
+    }
+
     public function sendPostsEmailRouter($user_id, $post_id, $event_id, $title, $message)
     {
         if (Configure::read('MISP.background_jobs')) {
             $user = $this->User->findById($user_id);
+
+            /** @var Job $job */
             $job = ClassRegistry::init('Job');
-            $job->create();
-            $data = array(
-                    'worker' => 'email',
-                    'job_type' => 'posts_alert',
-                    'job_input' => 'Post: ' . $post_id,
-                    'status' => 0,
-                    'retries' => 0,
-                    'org_id' => $user['User']['org_id'],
-                    'org' => $user['Organisation']['name'],
-                    'message' => 'Sending...',
+            $jobId = $job->createJob(
+                $user['User'],
+                Job::WORKER_EMAIL,
+                'posts_alert',
+                'Post: ' . $post_id,
+                'Sending...'
             );
-            $job->save($data);
-            $jobId = $job->id;
-            $process_id = CakeResque::enqueue(
-                    'email',
-                    'EventShell',
-                    array('postsemail', $user_id, $post_id, $event_id, $title, $message, $jobId),
-                    true
+
+            $this->getBackgroundJobsTool()->enqueue(
+                BackgroundJobsTool::EMAIL_QUEUE,
+                BackgroundJobsTool::CMD_EVENT,
+                [
+                    'postsemail',
+                    $user_id,
+                    $post_id,
+                    $event_id,
+                    $title,
+                    $message,
+                    $jobId
+                ],
+                true,
+                $jobId
             );
-            $job->saveField('process_id', $process_id);
+
             return true;
         } else {
             return $this->sendPostsEmail($user_id, $post_id, $event_id, $title, $message);

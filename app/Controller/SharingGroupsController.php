@@ -20,7 +20,7 @@ class SharingGroupsController extends AppController
         'limit' => 60,
         'maxLimit' => 9999, // LATER we will bump here on a problem once we have more than 9999 events <- no we won't, this is the max a user van view/page.
         'order' => array(
-            'SharingGroup.name' => 'ASC'
+            'SharingGroup.id' => 'ASC'
         ),
         'fields' => array('SharingGroup.id', 'SharingGroup.uuid', 'SharingGroup.name', 'SharingGroup.description', 'SharingGroup.releasability', 'SharingGroup.local', 'SharingGroup.active', 'SharingGroup.roaming'),
         'contain' => array(
@@ -41,9 +41,8 @@ class SharingGroupsController extends AppController
 
     public function add()
     {
-        if (!$this->userRole['perm_sharing_group']) {
-            throw new MethodNotAllowedException('You don\'t have the required privileges to do that.');
-        }
+        $canModifyUuid = $this->Auth->user()['Role']['perm_site_admin'];
+
         if ($this->request->is('post')) {
             if ($this->_isRest()) {
                 if (isset($this->request->data['SharingGroup'])) {
@@ -79,6 +78,16 @@ class SharingGroupsController extends AppController
                 }
             }
             $this->SharingGroup->create();
+            // Never allow an id to be supplied on add: a primary key in the save data turns
+            // create() + save() into an update of an arbitrary existing sharing group, bypassing
+            // the edit ACL and letting a user take over a SG they have no access to.
+            unset($sg['id']);
+            // A locally created SG has no sync user; never let the json blob smuggle in a
+            // sync_user_id FK (CSRF field hashing does not cover values nested in the json).
+            unset($sg['sync_user_id']);
+            if (!$canModifyUuid) {
+                unset($sg['uuid']);
+            }
             $sg['active'] = $sg['active'] ? 1: 0;
             $sg['roaming'] = $sg['roaming'] ? 1: 0;
             $sg['organisation_uuid'] = $this->Auth->user('Organisation')['uuid'];
@@ -124,23 +133,15 @@ class SharingGroupsController extends AppController
         } elseif ($this->_isRest()) {
             return $this->RestResponse->describe('SharingGroup', 'add', false, $this->response->type());
         }
-        
-        $orgs = $this->SharingGroup->Organisation->find('all', array(
-            'conditions' => array('local' => 1),
-            'recursive' => -1,
-            'fields' => array('id', 'name', 'uuid')
-        ));
-        $this->set('orgs', $orgs);
+
         $this->set('localInstance', empty(Configure::read('MISP.external_baseurl')) ? Configure::read('MISP.baseurl') : Configure::read('MISP.external_baseurl'));
         // We just pass true and allow the user to edit, since he/she is just about to create the SG. This is needed to reuse the view for the edit
         $this->set('user', $this->Auth->user());
+        $this->set('canModifyUuid', $canModifyUuid);
     }
     
     public function edit($id = false)
     {
-        if (!$this->userRole['perm_sharing_group']) {
-            throw new MethodNotAllowedException('You don\'t have the required privileges to do that.');
-        }
         if (empty($id)) {
             throw new NotFoundException('Invalid sharing group.');
         }
@@ -163,6 +164,10 @@ class SharingGroupsController extends AppController
                 ),
             ),
         ));
+        if (empty($sharingGroup)) {
+            throw new NotFoundException('Invalid sharing group.');
+        }
+
         if (!$this->SharingGroup->checkIfAuthorisedExtend($this->Auth->user(), $sharingGroup['SharingGroup']['id'])) {
             throw new MethodNotAllowedException('Action not allowed.');
         }
@@ -226,12 +231,8 @@ class SharingGroupsController extends AppController
 
     public function delete($id)
     {
-        if (!$this->userRole['perm_sharing_group']) {
-            throw new MethodNotAllowedException('You don\'t have the required privileges to do that.');
-        }
-        if (!$this->request->is('post') && !$this->request->is('delete')) {
-            throw new MethodNotAllowedException(__('Action not allowed, post or delete request expected.'));
-        }
+        $this->request->allowMethod(['post', 'delete']);
+
         $deletedSg = $this->SharingGroup->find('first', array(
             'conditions' => Validation::uuid($id) ? ['uuid' => $id] : ['id' => $id],
             'recursive' => -1,
@@ -262,7 +263,7 @@ class SharingGroupsController extends AppController
     public function index($passive = false)
     {
         $passive = $passive === 'true';
-        $authorizedSgIds = $this->SharingGroup->fetchAllAuthorised($this->Auth->user());
+        $authorizedSgIds = $this->SharingGroup->authorizedIds($this->Auth->user());
         $this->paginate['conditions'][] = array('SharingGroup.id' => $authorizedSgIds);
         $this->paginate['conditions'][] = array('SharingGroup.active' => $passive === true ? 0 : 1);
 
@@ -446,9 +447,9 @@ class SharingGroupsController extends AppController
 
     private function __initialiseSGQuickEdit($id, $request)
     {
-        if (!$this->request->is('post') || !$this->_isRest()) {
-            //throw new MethodNotAllowedException('This action only accepts POST requests coming from the API.');
-        }
+        // Guarded here rather than in each of the four callers - addOrg,
+        // removeOrg, addServer and removeServer all funnel through this helper.
+        $this->_requirePostUnlessApiKey();
         // allow passing the sg_id via a JSON object
         if (!$id) {
             $validParams = array('sg_id', 'sg_uuid', 'id', 'uuid');

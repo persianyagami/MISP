@@ -21,7 +21,7 @@ echo $this->element('genericElements/Form/genericForm', [
             [
                 'field' => 'user_id',
                 'label' => __('Restrict tagging to user'),
-                'options' => $users,
+                'options' => $isSiteAdmin ? $users : null,
                 'type' => 'dropdown',
                 'requirements' => $isSiteAdmin,
             ],
@@ -32,6 +32,11 @@ echo $this->element('genericElements/Form/genericForm', [
             ],
             [
                 'field' => 'hide_tag',
+                'type' => 'checkbox'
+            ],
+            [
+                'field' => 'local_only',
+                'label' => __('Enforce this tag to be used as local only'),
                 'type' => 'checkbox'
             ]
         ],

@@ -7,7 +7,6 @@ App::uses('AppController', 'Controller');
 class EventReportsController extends AppController
 {
     public $components = array(
-        'Security',
         'AdminCrud',
         'RequestHandler'
     );
@@ -15,8 +14,8 @@ class EventReportsController extends AppController
     public $paginate = array(
         'limit' => 60,
         'order' => array(
-                'EventReport.event_id' => 'ASC',
-                'EventReport.name' => 'ASC'
+            'EventReport.event_id' => 'ASC',
+            'EventReport.name' => 'ASC'
         ),
         'recursive' => -1,
         'contain' => array(
@@ -25,9 +24,22 @@ class EventReportsController extends AppController
                 'fields' =>  array('Event.id', 'Event.orgc_id', 'Event.org_id', 'Event.info', 'Event.user_id', 'Event.date'),
                 'Orgc' => array('fields' => array('Orgc.id', 'Orgc.name')),
                 'Org' => array('fields' => array('Org.id', 'Org.name'))
-            )
+            ),
+            'EventReportTag' => [
+                'Tag'
+            ]
         )
     );
+
+    public function beforeFilter()
+    {
+        parent::beforeFilter();
+        // purgeUnusedPictures is only ever reached by the picture management
+        // page's hand-built AJAX, which has no rendered form behind it to
+        // produce the field hash _validatePost() compares against. It sends
+        // the page's CSRF token in the X-CSRF-Token header instead.
+        $this->_csrfTokenHeaderOnly(['purgeUnusedPictures']);
+    }
 
     public function add($eventId = false)
     {
@@ -37,16 +49,17 @@ class EventReportsController extends AppController
         if ($eventId === false) {
             throw new MethodNotAllowedException(__('No event ID set.'));
         }
+        $eventId = $this->Toolbox->findIdByUuid($this->EventReport->Event, $eventId);
         $event = $this->__canModifyReport($eventId);
         if ($this->request->is('post') || $this->request->is('put')) {
             if (!isset($this->request->data['EventReport'])) {
-                $this->request->data['EventReport'] = $this->request->data;
+                $this->request->data = array('EventReport' => $this->request->data);
             }
             $report = $this->request->data;
             $errors = $this->EventReport->addReport($this->Auth->user(), $report, $eventId);
             $redirectTarget = array('controller' => 'events', 'action' => 'view', $eventId);
             if (!empty($errors)) {
-                return $this->__getFailResponseBasedOnContext($errors, array(), 'add', $this->EventReport->id, $redirectTarget);
+                return $this->__getFailResponseBasedOnContext($errors, null, 'add', $this->EventReport->id, $redirectTarget);
             } else {
                 $successMessage = __('Report saved.');
                 $report = $this->EventReport->simpleFetchById($this->Auth->user(), $this->EventReport->id);
@@ -62,6 +75,8 @@ class EventReportsController extends AppController
 
     public function view($reportId, $ajax=false)
     {
+        $this->EventReport->includeAnalystData = true;
+        $this->EventReport->includeAnalystDataRecursive = true;
         $report = $this->EventReport->simpleFetchById($this->Auth->user(), $reportId);
         if ($this->_isRest()) {
             return $this->RestResponse->viewData($report, $this->response->type());
@@ -70,6 +85,7 @@ class EventReportsController extends AppController
         $this->set('id', $reportId);
         $this->set('report', $report);
         $this->set('title_for_layout', __('Event report %s', $report['EventReport']['name']));
+        $this->__injectTemplateVariables($this->Auth->user());
         $this->__injectDistributionLevelToViewContext();
         $this->__injectPermissionsToViewContext($this->Auth->user(), $report);
     }
@@ -79,8 +95,9 @@ class EventReportsController extends AppController
         if (!$this->_isRest()) {
             throw new MethodNotAllowedException(__('This function can only be reached via the API.'));
         }
-        $report = $this->EventReport->simpleFetchById($this->Auth->user(), $reportId);
-        $proxyMISPElements = $this->EventReport->getProxyMISPElements($this->Auth->user(), $report['EventReport']['event_id']);
+        $user = $this->_closeSession();
+        $report = $this->EventReport->simpleFetchById($user, $reportId);
+        $proxyMISPElements = $this->EventReport->getProxyMISPElements($user, $report['EventReport']['event_id']);
         return $this->RestResponse->viewData($proxyMISPElements, $this->response->type());
     }
 
@@ -91,6 +108,7 @@ class EventReportsController extends AppController
         $this->set('report', $report);
         $this->__injectDistributionLevelToViewContext();
         $this->__injectPermissionsToViewContext($this->Auth->user(), $report);
+        $this->__injectTemplateVariables($this->Auth->user());
     }
 
     public function edit($id)
@@ -140,7 +158,7 @@ class EventReportsController extends AppController
             if (!$this->request->is('ajax')) {
                 throw new MethodNotAllowedException(__('This function can only be reached via AJAX.'));
             } else {
-                $this->layout = 'ajax';
+                $this->layout = false;
                 $this->set('report', $report);
                 $this->render('ajax/delete');
             }
@@ -164,27 +182,190 @@ class EventReportsController extends AppController
             if (!$this->request->is('ajax')) {
                 throw new MethodNotAllowedException(__('This function can only be reached via AJAX.'));
             } else {
-                $this->layout = 'ajax';
+                $this->layout = false;
                 $this->set('report', $report);
+            }
+        }
+    }
+
+    public function addTag($id = false, $tag_id = false)
+    {
+        $local = empty($this->request->params['named']['local']) ? 0 : 1;
+        if (!$this->request->is('post')) {
+            if ($id === false) {
+                throw new NotFoundException(__('Invalid report'));
+            }
+            $report = $this->EventReport->fetchIfAuthorized($this->Auth->user(), $id, 'view', $throwErrors=true, $full=false);
+            if (!$this->__canModifyTag($report, $local)) {
+                return new CakeResponse(array('body'=> json_encode(array('saved' => false, 'errors' => 'You don\'t have permission to do that.')), 'status'=>200, 'type' => 'json'));
+            }
+            $this->set('local', $local);
+            $this->set('object_id', $id);
+            $this->set('scope', 'EventReport');
+            $this->layout = false;
+            $this->autoRender = false;
+            $this->render('/Events/add_tag');
+        } else {
+            $report = $this->EventReport->fetchIfAuthorized($this->Auth->user(), $id, 'view', $throwErrors=true, $full=false);
+            if (!$this->__canModifyTag($report, $local)) {
+                return new CakeResponse(array('body'=> json_encode(array('saved' => false, 'errors' => 'You don\'t have permission to do that.')), 'status'=>200, 'type' => 'json'));
+            }
+            if ($tag_id === false) {
+                if (!isset($this->request->data['EventReport']['tag'])) {
+                    throw new NotFoundException(__('Invalid tag'));
+                }
+                $tag_id = $this->request->data['EventReport']['tag'];
+            }
+            if (!is_numeric($tag_id)) {
+                if (preg_match('/^collection_[0-9]+$/i', $tag_id)) {
+                    $tagChoice = explode('_', $tag_id)[1];
+                    $this->loadModel('TagCollection');
+                    $tagCollection = $this->TagCollection->fetchTagCollection($this->Auth->user(), ['conditions' => ['TagCollection.id' => $tagChoice]]);
+                    if (empty($tagCollection)) {
+                        return new CakeResponse(array('body'=> json_encode(array('saved' => false, 'errors' => 'Invalid Tag Collection.')), 'status'=>200, 'type' => 'json'));
+                    }
+                    $tag_id_list = array_column($tagCollection[0]['TagCollectionTag'], 'tag_id');
+                } else {
+                    // try to parse json array
+                    $tag_ids = json_decode($tag_id);
+                    if ($tag_ids !== null) { // can decode json
+                        $tag_id_list = [];
+                        foreach ($tag_ids as $tag_id) {
+                            if (preg_match('/^collection_[0-9]+$/i', $tag_id)) {
+                                $tagChoice = explode('_', $tag_id)[1];
+                                $this->loadModel('TagCollection');
+                                $tagCollection = $this->TagCollection->fetchTagCollection($this->Auth->user(), ['conditions' => ['TagCollection.id' => $tagChoice]]);
+                                if (empty($tagCollection)) {
+                                    return new CakeResponse(array('body'=> json_encode(array('saved' => false, 'errors' => 'Invalid Tag Collection.')), 'status'=>200, 'type' => 'json'));
+                                }
+                                $tag_id_list = array_column($tagCollection[0]['TagCollectionTag'], 'tag_id');
+                            } else {
+                                $tag_id_list[] = $tag_id;
+                            }
+                        }
+                    } else {
+                        $tagId = $this->EventReport->EventReportTag->Tag->lookupTagIdForUser($this->Auth->user(), trim($tag_id));
+                        if (empty($tagId)) {
+                            return new CakeResponse(array('body'=> json_encode(array('saved' => false, 'errors' => 'Invalid Tag.')), 'status'=>200, 'type' => 'json'));
+                        }
+                        $tag_id = $tagId;
+                    }
+                }
+            }
+            if (empty($tag_id_list)) {
+                $tag_id_list = [$tag_id];
+            }
+            $saveResult = $this->EventReport->attachTags($this->Auth->user(), $report, $tag_id_list, $local);
+            $fails = $saveResult['fails'];
+            $successes = $saveResult['successes'];
+            if ($fails === 0) {
+                $message = __n('Tag added.', '%s tags added', $successes, $successes);
+                return new CakeResponse(array('body'=> json_encode(array('saved' => true, 'success' => $message, 'check_publish' => true)), 'status' => 200, 'type' => 'json'));
+            } else {
+                $message = __n('Tag could not be added.', '%s tags could not be added.', $fails, $fails);
+                if ($successes > 0) {
+                    $message .= __n(' However, %s tag was added.', ' However, %s tags were added.', $successes, $successes);
+                }
+                return new CakeResponse(array('body' => json_encode(array('saved' => false, 'errors' => $message)), 'status' => 200, 'type' => 'json'));
+            }
+        }
+    }
+
+    public function removeTag($id = false, $tag_id = false, $galaxy = false)
+    {
+        $report = $this->EventReport->fetchIfAuthorized($this->Auth->user(), $id, 'view', $throwErrors=true, $full=false);
+        if (!$this->request->is('post')) {
+            $reportTag = $this->EventReport->EventReportTag->find('first', array(
+                'conditions' => array(
+                    'event_report_id' => $report['EventReport']['id'],
+                    'tag_id' => $tag_id,
+                ),
+                'contain' => ['Tag'],
+                'recursive' => -1,
+            ));
+            if (!$reportTag) {
+                throw new NotFoundException(__('Invalid tag.'));
+            }
+            $this->set('is_local', $reportTag['EventReportTag']['local']);
+            $this->set('tag', $reportTag);
+            $this->set('id', $report['EventReport']['id']);
+            $this->set('tag_id', $tag_id);
+            $this->set('model', 'event_report');
+            $this->set('model_name', $report['EventReport']['name']);
+            $this->render('/Attributes/ajax/tagRemoveConfirmation');
+        } else {
+            if ($id === false) {
+                $id = $this->request->data['event'];
+            }
+            if ($tag_id === false) {
+                $tag_id = $this->request->data['tag'];
+            }
+            if (empty($tag_id)) {
+                return new CakeResponse(array('body'=> json_encode(array('saved' => false, 'errors' => 'Invalid ' . ($galaxy ? 'Galaxy' : 'Tag') . '.')), 'status'=>200, 'type' => 'json'));
+            }
+            if (!is_numeric($tag_id)) {
+                $tag = $this->EventReport->EventReportTag->Tag->find('first', array('recursive' => -1, 'conditions' => array('LOWER(Tag.name) LIKE' => strtolower(trim($tag_id)))));
+                if (empty($tag)) {
+                    return new CakeResponse(array('body'=> json_encode(array('saved' => false, 'errors' => 'Invalid ' . ($galaxy ? 'Galaxy' : 'Tag') . '.')), 'status'=>200, 'type' => 'json'));
+                }
+                $tag_id = $tag['Tag']['id'];
+            }
+            if (!is_numeric($id)) {
+                // DPT-2: pin the detach target to the route-authorised
+                // report. Reading the id from the body let it diverge from
+                // the report __canModifyTag() authorises against (which uses
+                // the route report's event), so a perm_tagger user could
+                // strip tags off a report they may not modify (IDOR).
+                $id = $report['EventReport']['id'];
+            }
+            $eventReportTag = $this->EventReport->EventReportTag->find('first', array(
+                'conditions' => array(
+                    'event_report_id' => $id,
+                    'tag_id' => $tag_id
+                ),
+                'recursive' => -1,
+            ));
+            if (!$eventReportTag) {
+                return new CakeResponse(array('body'=> json_encode(array('saved' => false, 'errors' => 'Invalid event-report - ' . ($galaxy ? 'galaxy' : 'tag') . ' combination.')), 'status'=>200, 'type' => 'json'));
+            }
+            $event = ['Event' => $report['Event']];
+            // org should allow to (un)tag too, so that an event that gets pushed can be (un)tagged locally by the owning org
+            if (!$this->__canModifyTag($event, $eventReportTag['EventReportTag']['local'])) {
+                return new CakeResponse(array('body'=> json_encode(array('saved' => false, 'errors' => 'You don\'t have permission to do that.')), 'status'=>200, 'type' => 'json'));
+            }
+            $tag = $this->EventReport->EventReportTag->Tag->find('first', array(
+                'conditions' => array('Tag.id' => $tag_id),
+                'recursive' => -1,
+                'fields' => array('Tag.name')
+            ));
+            $detachSuccess = $this->EventReport->detachTag($eventReportTag['EventReportTag']['id'], $id, !empty($eventReportTag['EventReportTag']['local']));
+            if ($detachSuccess) {
+                $log = ClassRegistry::init('Log');
+                $log->createLogEntry($this->Auth->user(), 'tag', 'EventReport', $id, 'Removed tag (' . $tag_id . ') "' . $tag['Tag']['name'] . '" from event-report (' . $id . ')', 'EventReport (' . $id . ') untagged of Tag (' . $tag_id . ')');
+                return new CakeResponse(array('body'=> json_encode(array('saved' => true, 'success' => ($galaxy ? 'Galaxy' : 'Tag') . ' removed.', 'check_publish' => empty($eventReportTag['EventReportTag']['local']))), 'status'=>200, 'type' => 'json'));
+            } else {
+                return new CakeResponse(array('body'=> json_encode(array('saved' => false, 'errors' => ($galaxy ? 'Galaxy' : 'Tag') . ' could not be removed.')), 'status'=>200, 'type' => 'json'));
             }
         }
     }
 
     public function index()
     {
-        $filters = $this->IndexFilter->harvestParameters(['event_id', 'value', 'context', 'index_for_event', 'extended_event']);
+        $filters = $this->IndexFilter->harvestParameters(['event_id', 'value', 'context', 'index_for_event', 'extended_event', 'extending_event']);
         $filters['embedded_view']  = $this->request->is('ajax');
         $compiledConditions = $this->__generateIndexConditions($filters);
+        $this->EventReport->includeAnalystData = true;
         if ($this->_isRest()) {
             $reports = $this->EventReport->find('all', [
                 'recursive' => -1,
                 'conditions' => $compiledConditions,
-                'contain' => $this->EventReport->defaultContain,
+                'contain' => EventReport::DEFAULT_CONTAIN,
             ]);
             return $this->RestResponse->viewData($reports, $this->response->type());
         } else {
             $this->paginate['conditions']['AND'][] = $compiledConditions;
             $reports = $this->paginate();
+            $reports = $this->__moveTagLocality($reports);
             $this->set('reports', $reports);
             $this->__injectIndexVariablesToViewContext($filters);
             if (!empty($filters['index_for_event'])) {
@@ -198,20 +379,41 @@ class EventReportsController extends AppController
                     $canModify = false;
                 }
                 $this->set('canModify', $canModify);
+                $this->set('mayModify', $canModify);
                 $this->set('extendedEvent', !empty($filters['extended_event']));
-                $fetcherModule = $this->EventReport->isFetchURLModuleEnabled();
+                $this->set('extendingEvent', !empty($filters['extending_event']));
+                $fetcherModule = $this->EventReport->isFetchURLModuleEnabled($this->Auth->user());
                 $this->set('importModuleEnabled', is_array($fetcherModule));
+                $this->set('unsafeUrlSettingEnabled', !empty(Configure::read('Security.eventreport_enable_arbitrary_urls')));
                 $this->render('ajax/indexForEvent');
+            } else {
+                $this->set('title_for_layout', __('Event Reports'));
+                $this->set('canModify', false);
+                $this->set('mayModify', false);
             }
         }
     }
 
+    private function __moveTagLocality(array $reports): array
+    {
+        foreach ($reports as $i => $report) {
+            foreach ($report['EventReportTag'] as $j => $reportTag) {
+                $reports[$i]['EventReportTag'][$j]['Tag']['local'] = $reportTag['local'];
+            }
+        }
+        return $reports;
+    }
+
     public function extractAllFromReport($reportId)
     {
-        if (!$this->request->is('ajax')) {
+        if (!$this->request->is('ajax') && !$this->_isRest()) {
             throw new MethodNotAllowedException(__('This function can only be reached via AJAX.'));
         }
+        $reportId = $this->Toolbox->findIdByUuid($this->EventReport, $reportId);
         if ($this->request->is('post')) {
+            if (!isset($this->data['EventReport'])) {
+                $this->data = ['EventReport' => $this->data];
+            }
             $report = $this->EventReport->fetchIfAuthorized($this->Auth->user(), $reportId, 'edit', $throwErrors=true, $full=false);
             $results = $this->EventReport->getComplexTypeToolResultWithReplacements($this->Auth->user(), $report);
             $report['EventReport']['content'] = $results['replacementResult']['contentWithReplacements'];
@@ -231,7 +433,7 @@ class EventReportsController extends AppController
                 return $this->__getFailResponseBasedOnContext($errorMessage, array(), 'applySuggestions', $reportId);
             }
         }
-        $this->layout = 'ajax';
+        $this->layout = false;
         $this->set('reportId', $reportId);
         $this->render('ajax/extractAllFromReport');
     }
@@ -264,7 +466,7 @@ class EventReportsController extends AppController
             $report = $this->EventReport->fetchIfAuthorized($this->Auth->user(), $reportId, 'edit', $throwErrors=true, $full=false);
             if ($this->request->is('post')) {
                 $errors = [];
-                $suggestions = $this->EventReport->jsonDecode($this->data['EventReport']['suggestions']);
+                $suggestions = $this->_jsonDecode($this->data['EventReport']['suggestions']);
                 if (!empty($suggestions['content']) && !empty($suggestions['mapping'])) {
                     $errors = $this->EventReport->applySuggestions($this->Auth->user(), $report, $suggestions['content'], $suggestions['mapping']);
                 } else {
@@ -287,46 +489,86 @@ class EventReportsController extends AppController
                     return $this->__getFailResponseBasedOnContext($errorMessage, array(), 'applySuggestions', $reportId);
                 }
             }
-            $this->layout = 'ajax';
+            $this->layout = false;
             $this->render('ajax/replaceSuggestionInReport');
         }
     }
 
     public function importReportFromUrl($event_id)
     {
-        if (!$this->request->is('ajax')) {
-            throw new MethodNotAllowedException(__('This function can only be reached via AJAX.'));
+        if (!$this->request->is('ajax') && !$this->_isRest()) {
+            throw new MethodNotAllowedException(__('This function can only be reached via AJAX and via the API.'));
         }
-        $fetcherModule = $this->EventReport->isFetchURLModuleEnabled();
+        if (empty(Configure::read('Security.eventreport_enable_arbitrary_urls'))) {
+            throw new MethodNotAllowedException(__('This function can only be used with the setting `Security.eventreport_enable_arbitrary_urls` turned on.'));
+        }
+
+        // throws exception if the user can't modify it
+        $this->__canModifyReport($event_id);
+        
+        $errors = [];
+        $fetcherModules = $this->EventReport->getEnabledFetchURLModules($this->Auth->user());
         if ($this->request->is('post')) {
+            if (empty($this->data['EventReport'])) {
+                $this->data = ['EventReport' => $this->data];
+            }
             if (empty($this->data['EventReport']['url'])) {
-                throw new MethodNotAllowedException(__('An URL must be provided'));
+                throw new MethodNotAllowedException(__('A URL must be provided'));
             }
             $url = $this->data['EventReport']['url'];
-            $markdown = $this->EventReport->downloadMarkdownFromURL($event_id, $url);
-            $errors = [];
-            if (!empty($markdown)) {
-                $report = [
-                    'name' => __('Report from - %s (%s)', $url, time()),
-                    'distribution' => 5,
-                    'content' => $markdown
-                ];
-                $errors = $this->EventReport->addReport($this->Auth->user(), $report, $event_id);
-            } else {
-                $errors[] = __('Could not fetch report from URL. Fetcher module not enabled or could not download the page');
+            if (!preg_match('/^https?:\/\//i', $url)) {
+                throw new InvalidArgumentException('Invalid URL: must start with http:// or https://');
+            }
+            $format = 'html';
+
+            // Match against the path only. Testing the whole URL let a query
+            // string supply the suffix, so `http://host/anything?x=.pdf`
+            // selected pdf and picked which host performed the fetch.
+            $path = parse_url($url, PHP_URL_PATH);
+            $parsed_formats = ['pdf', 'xlsx', 'pptx', 'ods', 'odt', 'docx'];
+            foreach ($parsed_formats as $parsed_format) {
+                if (!empty($path) && substr($path, -(1 + strlen($parsed_format))) === '.' . $parsed_format) {
+                    $format = $parsed_format;
+                }
+            }
+            $content = null;
+            if (empty($errors)) {
+                try {
+                    $content = $this->EventReport->downloadMarkdownFromURL($this->Auth->user(), $event_id, $url, $format);
+                } catch (Exception $e) {
+                    // A refused target, an oversized document or a failed
+                    // fetch all report through the normal error path rather
+                    // than surfacing as an unhandled exception.
+                    $content = null;
+                    $errors[] = $e->getMessage();
+                }
+                if (!empty($content)) {
+                    $report = [
+                        'name' => __('Report from - %s (%s)', $url, time()),
+                        'distribution' => 5,
+                        'content' => $content
+                    ];
+                    $errors = $this->EventReport->addReport($this->Auth->user(), $report, $event_id);
+                } else {
+                    $errors[] = __('Could not fetch report from URL. Fetcher module not enabled or could not download the page');
+                }
             }
             $redirectTarget = array('controller' => 'events', 'action' => 'view', $event_id);
             if (!empty($errors)) {
-                return $this->__getFailResponseBasedOnContext($errors, array(), 'addFromURL', $this->EventReport->id, $redirectTarget);
+                $event_report_id = empty($this->EventReport->id) ? 0 : $this->EventReport->id;
+                // null, not array(): __getFailResponseBasedOnContext returns
+                // viewData($data) whenever $data is not null, which discarded
+                // the message and answered REST callers with a bare [].
+                return $this->__getFailResponseBasedOnContext($errors, null, 'addFromURL', $event_report_id, $redirectTarget);
             } else {
                 $successMessage = __('Report downloaded and created');
                 $report = $this->EventReport->simpleFetchById($this->Auth->user(), $this->EventReport->id);
                 return $this->__getSuccessResponseBasedOnContext($successMessage, $report, 'addFromURL', false, $redirectTarget);
             }
         }
-        $this->set('importModuleEnabled', is_array($fetcherModule));
+        $this->set('importModuleEnabled', !empty($fetcherModules));
         $this->set('event_id', $event_id);
-        $this->layout = 'ajax';
+        $this->layout = false;
         $this->render('ajax/importReportFromUrl');
     }
 
@@ -334,7 +576,7 @@ class EventReportsController extends AppController
     {
         $event = $this->__canModifyReport($eventId);
         if ($this->request->is('post') || $this->request->is('put')) {
-            $filters = $this->EventReport->jsonDecode($this->data['EventReport']['filters']);
+            $filters = $this->_jsonDecode($this->data['EventReport']['filters']);
             $options['conditions'] = $filters;
             $options['conditions'] = array_filter($filters, function($v) {
                 return $v !== '';
@@ -368,8 +610,166 @@ class EventReportsController extends AppController
             }
         }
         $this->set('event_id', $eventId);
-        $this->layout = 'ajax';
+        $this->layout = false;
         $this->render('ajax/reportFromEvent');
+    }
+
+    public function sendToLLM($reportId)
+    {
+        if (!$this->request->is('ajax')) {
+            throw new MethodNotAllowedException(__('This function can only be reached via AJAX.'));
+        } else {
+            $report = $this->EventReport->fetchIfAuthorized($this->Auth->user(), $reportId, 'edit', true, false);
+            if ($this->request->is('post')) {
+                $errors = [];
+                $result = $this->EventReport->sendToLLM($report, $this->Auth->user(), $errors);
+                if ($result !== false) {
+                    $successMessage = __('Successfully sent to Event Report %s to LLM', $reportId);
+                    return $this->__getSuccessResponseBasedOnContext($successMessage, $result, 'sendToLLM', $reportId);
+                } else {
+                    $errorMessage = __('Could not send Event Report %s to LLM.%sReasons: %s', $reportId, PHP_EOL, json_encode($errors));
+                    return $this->__getFailResponseBasedOnContext($errorMessage, array(), 'sendToLLM', $reportId);
+                }
+            }
+            $this->layout = false;
+            $this->render('ajax/sendToLLM');
+        }
+    }
+
+    public function uploadPicture($reportId)
+    {
+        if (!$this->request->is('ajax')) {
+            throw new MethodNotAllowedException(__('This function can only be reached via AJAX.'));
+        } else {
+            $report = $this->EventReport->fetchIfAuthorized($this->Auth->user(), $reportId, 'edit', true, false);
+            if ($this->request->is('post')) {
+                $this->loadModel('Attribute');
+                $picture = $this->request->data['EventReport']['picture'];
+                $saveAsAttachmentConfig = false;
+                if ($this->Auth->user()['Role']['perm_site_admin']) {
+                    $saveAsAttachment = !empty($this->request->data['EventReport']['save_as_attachment']);
+                } else {
+                    $saveAsAttachment = true;
+                    $saveAsAttachmentConfig = [];
+                }
+                if ($saveAsAttachment) {
+                    $saveAsAttachmentConfig['comment'] = $this->request->data['EventReport']['comment'] ?? __('Imported via Event Report');
+                    $saveAsAttachmentConfig['distribution'] = $this->request->data['EventReport']['distribution'] ?? $this->Attribute->defaultDistribution();
+                }
+                $uploadResult = $this->EventReport->uploadPicture($picture, $report, $saveAsAttachmentConfig);
+                if ($uploadResult['success']) {
+                    $successMessage = __('Successfully uploaded image');
+                    return $this->__getSuccessResponseBasedOnContext($successMessage, $uploadResult, 'uploadPicture', $reportId);
+                } else {
+                    $errorMessage = __('Could not upload image. Reasons: %s', implode(', ', $uploadResult['errors']));
+                    return $this->__getFailResponseBasedOnContext($errorMessage, [], 'uploadPicture', $reportId);
+                }
+            }
+            $this->layout = false;
+            $this->set('report_id', $reportId);
+            $this->__injectDistributionLevelToViewContext();
+            $this->render('ajax/uploadPicture');
+        }
+    }
+
+    /**
+     * Serve a picture from the instance's asset folder.
+     *
+     * These files are instance-wide assets rather than event-scoped
+     * content, and are deliberately readable by any authenticated user.
+     * Only site admins can store one (see uploadPicture(), which forces
+     * every other role down the attachment path), the folder is curated
+     * globally from managedImportedPictures(), and a picture may be given
+     * an alias and reused across reports of different events.
+     *
+     * There is therefore no owning report to authorise against: the only
+     * reference that exists is the picture's mention in report content,
+     * and that is writable by anyone holding perm_add. Imagery that has to
+     * follow an event's distribution must be stored as an attachment,
+     * which inherits the event's ACL.
+     */
+    public function viewPicture($filename)
+    {
+        $this->_closeSession();
+        $image = $this->EventReport->getPicture($filename);
+        $extension = strtolower(pathinfo($image['filename'], PATHINFO_EXTENSION));
+        return $this->RestResponse->sendFile($image['file'], $extension);
+    }
+
+    public function managedImportedPictures()
+    {
+        $importedPictureStats = $this->EventReport->collectImportedPicturesStats();
+        $tableData = [];
+        foreach ($importedPictureStats['all_files'] as $filename) {
+            $referenceCount = !empty($importedPictureStats['file_referenced_count'][$filename]) ? $importedPictureStats['file_referenced_count'][$filename] : 0;
+            $alias = $importedPictureStats['picture_aliases'][$filename];
+            $tableData[] = [
+                'filename' => $filename,
+                'reference_count' => $referenceCount,
+                'is_referenced' => $referenceCount > 0,
+                'alias' => $alias,
+            ];
+        }
+        $this->set('data', $tableData);
+    }
+
+    public function purgeUnusedPictures()
+    {
+        $this->_requirePostUnlessApiKey();
+        $this->EventReport->purgeUnusedPictures();
+        $message = __('Purged all unused pictures');
+        return $this->__getSuccessResponseBasedOnContext($message, null, 'purgeUnusedPictures');
+    }
+
+    public function deletePicture($filename)
+    {
+        if ($this->request->is('post')) {
+            $deletionSuccess = $this->EventReport->purgeImage($filename);
+            if ($deletionSuccess) {
+                $successMessage = __('Success deleting picture');
+                return $this->__getSuccessResponseBasedOnContext($successMessage, [], 'deletePicture', $filename, ['controller' => 'eventReports', 'action' => 'managedImportedPictures']);
+            } else {
+                $errorMessage = __('Error while deleting picture');
+                return $this->__getFailResponseBasedOnContext($errorMessage, [], 'deletePicture', $filename, ['controller' => 'eventReports', 'action' => 'managedImportedPictures']);
+            }
+        }
+    }
+
+    public function setFileAlias()
+    {
+        $this->render('ajax/setFileAlias');
+        if ($this->request->is('post')) {
+            $errors = $this->EventReport->setFileAlias($this->request->data['EventReport']);
+            if (empty($errors)) {
+                $successMessage = __('Alias set successfully');
+                return $this->__getSuccessResponseBasedOnContext($successMessage, [], 'setFileAlias', $this->request->data['EventReport']['filename']);
+            } else {
+                $errorMessage = __('Error while setting alias. Reasons: ' . implode(',', $errors));
+                return $this->__getFailResponseBasedOnContext($errorMessage, [], 'setFileAlias', $this->request->data['EventReport']['filename']);
+            }
+        }
+    }
+
+    public function downloadAsPDF($reportId)
+    {
+        $this->__isDownloadAsPDFModuleAvailable();
+        $report = $this->EventReport->simpleFetchById($this->Auth->user(), $reportId);
+        $pdfFile = $this->EventReport->convertToPDF($this->Auth->user(), $report);
+        $fileExt = 'pdf';
+        $name = sprintf('%s_%s', $report['EventReport']['id'], $report['EventReport']['name']);
+        $filename = sprintf('%s_%s', $name, date("c"));
+        return $this->RestResponse->sendStringAsFile($pdfFile, $fileExt, $filename . '.' . $fileExt);
+    }
+
+    private function __isDownloadAsPDFModuleAvailable()
+    {
+        $moduleName = 'convert_markdown_to_pdf';
+        $this->loadModel('Module');
+        $module = $this->Module->getEnabledModule($moduleName, 'expansion', $this->Auth->user());
+        if (!Configure::read('Plugin.Enrichment_' . $moduleName . '_enabled') || !is_array($module)) {
+            throw new MethodNotAllowedException('Module not found or not available.');
+        }
+        return true;
     }
 
     private function __generateIndexConditions($filters = [])
@@ -380,6 +780,9 @@ class EventReportsController extends AppController
             $extendingEventIds = [];
             if (!empty($filters['extended_event'])) {
                 $extendingEventIds = $this->EventReport->Event->getExtendingEventIdsFromEvent($this->Auth->user(), $filters['event_id']);
+            }
+            if (!empty($filters['extending_event'])) {
+                $extendingEventIds = $this->EventReport->Event->getExtendedEventIdsFromEvent($this->Auth->user(), $filters['event_id']);
             }
             $eventConditions = ['EventReport.event_id' => array_merge([$filters['event_id']], $extendingEventIds)];
         }
@@ -441,10 +844,10 @@ class EventReportsController extends AppController
             $message = implode(', ', $message);
         }
         if ($this->_isRest()) {
-            if (!is_null($data)) {
+            if ($data !== null) {
                 return $this->RestResponse->viewData($data, $this->response->type());
             } else {
-                return $this->RestResponse->saveFailResponse('EventReport', $action, $id, $message, false);
+                return $this->RestResponse->saveFailResponse('EventReport', $action, $id, $message);
             }
         } elseif ($this->request->is('ajax')) {
             return $this->RestResponse->saveFailResponse('EventReport', $action, $id, $message, false, $data);
@@ -452,7 +855,6 @@ class EventReportsController extends AppController
             $this->Flash->error($message);
             $this->redirect($this->referer());
         }
-        return;
     }
 
     private function __injectIndexVariablesToViewContext($filters)
@@ -482,6 +884,7 @@ class EventReportsController extends AppController
     {
         $distributionLevels = $this->EventReport->Event->Attribute->distributionLevels;
         $this->set('distributionLevels', $distributionLevels);
+        $this->set('shortDist', $this->EventReport->Event->Attribute->shortDist);
         $this->set('initialDistribution', $this->EventReport->Event->Attribute->defaultDistribution());
     }
 
@@ -491,10 +894,23 @@ class EventReportsController extends AppController
         $this->set('sharingGroups', $sgs);
     }
 
-    private function __injectPermissionsToViewContext($user, $report)
+    private function __injectPermissionsToViewContext(array $user, array $report)
     {
-        $canEdit = $this->EventReport->canEditReport($user, $report) === true;
+        $canEdit = $this->ACL->canEditEventReport($user, $report);
         $this->set('canEdit', $canEdit);
+        try {
+            $isDownloadAsPDFModuleAvailable = $this->__isDownloadAsPDFModuleAvailable();
+        } catch (MethodNotAllowedException $e) {
+            $isDownloadAsPDFModuleAvailable = false;
+        }
+        $this->set('isDownloadAsPDFModuleAvailable', $isDownloadAsPDFModuleAvailable);
+    }
+
+    private function __injectTemplateVariables()
+    {
+        $this->loadModel('EventReportTemplateVariable');
+        $templateVariables = $this->EventReportTemplateVariable->getAll();
+        $this->set('templateVariables', $templateVariables);
     }
 
     /**
@@ -520,11 +936,16 @@ class EventReportsController extends AppController
         if (!isset($newReport['EventReport'])) {
             $newReport = array('EventReport' => $newReport);
         }
-        $fieldList = $this->EventReport->captureFields;
         $ignoreFieldList = ['id', 'uuid', 'event_id', 'deleted'];
-        foreach ($fieldList as $field) {
+        foreach (EventReport::CAPTURE_FIELDS as $field) {
             if (!in_array($field, $ignoreFieldList) && isset($newReport['EventReport'][$field])) {
                 $savedReport['EventReport'][$field] = $newReport['EventReport'][$field];
+            }
+        }
+        $this->loadModel('AnalystData');
+        foreach ($this->AnalystData::ANALYST_DATA_TYPES as $type) {
+            if (!empty($newReport['EventReport'][$type])) {
+                $savedReport['EventReport'][$type] = $newReport['EventReport'][$type];
             }
         }
         return $savedReport;

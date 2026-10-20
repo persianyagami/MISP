@@ -1,8 +1,9 @@
 <?php
-/*
+/**
  * Reset a password
  *
  * arg0 = baseurl
+ * @deprecated
  */
 class BaseurlShell extends AppShell {
 
@@ -10,7 +11,8 @@ class BaseurlShell extends AppShell {
 
     public function main()
     {
-        $this->ConfigLoad->execute();
+        $this->deprecated('cake admin setSetting MISP.baseurl [baseurl]');
+
         $baseurl = $this->args[0];
         $result = $this->Server->testBaseURL($baseurl);
         if (true !== $result) {

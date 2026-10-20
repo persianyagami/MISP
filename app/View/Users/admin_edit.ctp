@@ -16,7 +16,7 @@
                 $password = false;
             } else {
                 $userType = Configure::read('Plugin.CustomAuth_name') ? Configure::read('Plugin.CustomAuth_name') : 'External authentication';
-                echo $this->Form->input('external_auth_required', array('type' => 'checkbox', 'label' => $userType . ' user'));
+                echo $this->Form->input('external_auth_required', array('type' => 'checkbox', 'label' => h($userType) . ' user'));
             }
             echo sprintf(
                 '<div class="clear"></div><div %s>%s</div>',
@@ -46,11 +46,24 @@
                 $passwordPopover = '<span class="blue bold">' . __('Length') .'</span>: ' . h($length) . '<br>';
                 $passwordPopover .= '<span class="blue bold">' . __('Complexity') .'</span>: ' . h($complexity);
                 echo $this->Form->input('password', array(
-                    'label' => __('Password') . ' <span id="PasswordPopover" data-content="' . h($passwordPopover) .'" class="fas fa-info-circle"></span>'
+                    'label' => __('Password') . ' <span id="PasswordPopover" data-content="' . h($passwordPopover) .'" class="fas fa-info-circle"></span>',
+                    'autocomplete' => 'new-password'
                 ));
                 echo $this->Form->input('confirm_password', array('type' => 'password', 'div' => array('class' => 'input password required')));
             ?>
         </div>
+        <?php
+            $isTotp = isset($this->request->data['User']['totp']) ? true : false;
+            if ($isTotp) {
+                echo sprintf(
+                    '<div class="clear"><span role="button" tabindex="0" aria-label="%s" onclick="openGenericModal(\'%s/users/totp_delete/%s\')" class="btn btn-inverse" style="margin-bottom:10px;">%s</span></div>',
+                    __('Delete TOTP token'),
+                    h($baseurl),
+                    h($this->request->data['User']['id']),
+                    __('Delete TOTP token')
+                );
+            } 
+        ?>
     </div>
     <div class="clear"></div>
     <?php
@@ -60,9 +73,14 @@
                     'label' => __('Organisation'),
             ));
         }
-        echo $this->Form->input('role_id', array('label' => __('Role')));   // TODO ACL, User edit role_id.
-        $authkeyLabel = __('Authkey') . ' <a class="useCursorPointer" onclick="$(\'#resetAuthKeyForm\').submit();">' . __('(Reset)') . '</a>';
-        echo $this->Form->input('authkey', array('disabled' => true, 'div' => 'input clear', 'label' => $authkeyLabel));
+        echo $this->Form->input('role_id', array(
+            'label' => __('Role'),
+            'div' => empty(Configure::read('Security.advanced_authkeys')) ? null : 'input clear'
+        ));
+        if (empty(Configure::read('Security.advanced_authkeys'))) {
+            $authkeyLabel = __('Authkey') . ' <a class="useCursorPointer" onclick="$(\'#resetAuthKeyForm\').submit();">' . __('(Reset)') . '</a>';
+            echo $this->Form->input('authkey', array('disabled' => true, 'div' => 'input clear', 'label' => $authkeyLabel));
+        }
         echo $this->Form->input('nids_sid', ['label' => __('NIDS SID')]);
     ?>
         <div id="syncServers" class="hidden">
@@ -71,10 +89,14 @@
     ?>
         </div>
     <?php
-        echo $this->Form->input('gpgkey', array('label' => __('PGP key'), 'div' => 'clear', 'class' => 'input-xxlarge', 'placeholder' => __('Paste the user\'s PGP key here or try to retrieve it from the CIRCL key server by clicking on "Fetch PGP key" below.')));
+        $placeholder = $canFetchPgpKey ? __('Paste the user\'s PGP key here or try to retrieve it from the CIRCL key server by clicking on "Fetch PGP key" below.')
+            :  __('Paste the user\'s PGP key here');
+        echo $this->Form->input('gpgkey', array('label' => __('PGP key'), 'div' => 'clear', 'class' => 'input-xxlarge', 'placeholder' => $placeholder));
+        if ($canFetchPgpKey):
     ?>
-        <div class="clear"><span role="button" tabindex="0" aria-label="<?php echo __('Fetch the user\'s PGP key');?>" onClick="lookupPGPKey('UserEmail');" class="btn btn-inverse" style="margin-bottom:10px;"><?php echo __('Fetch PGP key');?></span></div>
+        <div class="clear"><span role="button" tabindex="0" aria-label="<?php echo __('Fetch the user\'s PGP key');?>" onclick="lookupPGPKey();" class="btn btn-inverse" style="margin-bottom:10px;"><?= __('Fetch PGP key');?></span></div>
     <?php
+        endif;
         if (Configure::read('SMIME.enabled')) {
             echo $this->Form->input('certif_public', array('label' => __('S/MIME Public certificate (PEM format)'), 'div' => 'clear', 'class' => 'input-xxlarge', 'placeholder' => __('Paste the user\'s S/MIME public key in PEM format here.')));
         }
@@ -86,11 +108,19 @@
             'disabled' => !$canChangePassword,
             'data-disabled-reason' => !$canChangePassword ? __('User password change is disabled on this instance') : '',
         ]);
-        echo $this->Form->input('autoalert', array('label' => __('Receive email alerts when events are published'), 'type' => 'checkbox'));
         echo $this->Form->input('contactalert', array('label' => __('Receive email alerts from "Contact reporter" requests'), 'type' => 'checkbox'));
         echo $this->Form->input('disabled', array('type' => 'checkbox', 'label' => __('Immediately disable this user account')));
         echo '</div>';
     ?>
+    <h5><?= __('Subscribe to the following notification:') ?></h5>
+    <div class="user-edit-checkboxes">
+    <?php
+        echo $this->Form->input('autoalert', array('label' => __('Event published notification'), 'type' => 'checkbox'));
+        echo $this->Form->input('notification_daily', array('label' => __('Daily notifications'), 'type' => 'checkbox'));
+        echo $this->Form->input('notification_weekly', array('label' => __('Weekly notifications'), 'type' => 'checkbox'));
+        echo $this->Form->input('notification_monthly', array('label' => __('Monthly notifications'), 'type' => 'checkbox'));
+    ?>
+    </div>
     </fieldset>
     <div style="border-bottom: 1px solid #e5e5e5;width:100%;">&nbsp;</div>
     <div class="clear" style="margin-top:10px;">

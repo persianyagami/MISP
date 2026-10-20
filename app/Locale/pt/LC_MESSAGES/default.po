@@ -3001,7 +3001,7 @@ msgid "Turn Vulnerability type attributes into links linking to the provided CVE
 msgstr ""
 
 #: Model/Server.php:519
-msgid "This setting controls whether notification e-mails will be sent when an event is created via the REST interface. It might be a good idea to disable this setting when first setting up a link to another instance to avoid spamming your users during the initial pull. Quick recap: True = Emails are NOT sent, False = Emails are sent on events published via sync / REST."
+msgid "This setting controls whether notification e-mails will be sent when an event is created via the REST interface. It might be a good idea to enable this setting when first setting up a link to another instance to avoid spamming your users during the initial pull. Quick recap: True = Emails are NOT sent, False = Emails are sent on events published via sync / REST."
 msgstr ""
 
 #: Model/Server.php:527
@@ -7964,7 +7964,7 @@ msgstr ""
 
 #: View/Events/automation.ctp:42
 #: View/Events/legacy_automation.ctp:315
-msgid "If this parameter is set to 1, it will return soft-deleted attributes along with active ones. By using \"only\" as a parameter it will limit the returned data set to soft-deleted data only."
+msgid "Default value 0. If set to 1, only soft-deleted attributes will be returned. If set to [0,1] , both deleted and non-deleted attributes wil be returned."
 msgstr ""
 
 #: View/Events/automation.ctp:43

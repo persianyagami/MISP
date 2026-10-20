@@ -38,10 +38,10 @@ class ApacheAuthenticate extends BaseAuthenticate
         }
         return $returnCode;
     }
-	
+
     private function getEmailAddress($ldapEmailField, $ldapUserData)
     {
-	// return the email address of an LDAP user if one of the fields in $ldapEmaiLField exists
+        // return the email address of an LDAP user if one of the fields in $ldapEmaiLField exists
         foreach($ldapEmailField as $field) {
             if (isset($ldapUserData[0][$field][0])) {
                 return $ldapUserData[0][$field][0];
@@ -55,7 +55,7 @@ class ApacheAuthenticate extends BaseAuthenticate
 
         // Get information user for MISP auth
         $envvar = $this->settings['fields']['envvar'];
-        $mispUsername = $_SERVER[$envvar];
+        $mispUsername = ldap_escape($_SERVER[$envvar], '', LDAP_ESCAPE_FILTER);
 
         // make LDAP request to get user email required for MISP auth
         $ldapdn = Configure::read('ApacheSecureAuth.ldapDN');
@@ -73,6 +73,14 @@ class ApacheAuthenticate extends BaseAuthenticate
         ldap_set_option($ldapconn, LDAP_OPT_PROTOCOL_VERSION, Configure::read('ApacheSecureAuth.ldapProtocol'));
         ldap_set_option($ldapconn, LDAP_OPT_REFERRALS, Configure::read('ApacheSecureAuth.ldapAllowReferrals', true));
 
+        if (Configure::read('ApacheSecureAuth.starttls', false) == true) {
+            # Default is false, sine STARTTLS support is a new feature
+            # Ignored on ldaps://, but can trigger problems for orgs
+            # using unencrypted LDAP. Loose comparison allows users to
+            # use # true / 1 / etc.
+            ldap_start_tls($ldapconn);
+        }
+
         if ($ldapconn) {
             // LDAP bind
             $ldapbind = ldap_bind($ldapconn, $ldaprdn, $ldappass);
@@ -83,9 +91,9 @@ class ApacheAuthenticate extends BaseAuthenticate
             // example for searchFiler: '(objectclass=InetOrgPerson)(!(nsaccountlock=True))(memberOf=cn=misp,cn=groups,cn=accounts,dc=example,dc=com)'
             // example for searchAttribut: '(uuid=ApacheUser)'
             if (!empty($ldapSearchFilter)) {
-                $filter = '(&' . $ldapSearchFilter . '(' . Configure::read('ApacheSecureAuth.ldapSearchAttribut') . '=' . $_SERVER[$envvar] . '))';
+                $filter = '(&' . $ldapSearchFilter . '(' . Configure::read('ApacheSecureAuth.ldapSearchAttribut') . '=' . $mispUsername . '))';
             } else {
-                $filter = '(' . Configure::read('ApacheSecureAuth.ldapSearchAttribut') . '=' . $_SERVER[$envvar] . ')';
+                $filter = '(' . Configure::read('ApacheSecureAuth.ldapSearchAttribut') . '=' . $mispUsername . ')';
             }
             // example: mail
             $getLdapUserInfo = Configure::read('ApacheSecureAuth.ldapFilter');
@@ -105,7 +113,6 @@ class ApacheAuthenticate extends BaseAuthenticate
             } else {
                 die("User not found in LDAP");
             }
-		
             // close LDAP connection
             ldap_close($ldapconn);
         }

@@ -1,29 +1,8 @@
 <?php
-    $urlHere = Router::url(null);
-    $urlHere = explode('/', $urlHere);
-    foreach ($urlHere as $k => $v) {
-        $urlHere[$k] = urlencode($v);
-    }
-    $urlHere = implode('/', $urlHere);
-    $urlHere = $baseurl . $urlHere;
-    $mayModify = ($isSiteAdmin || ($isAclModify && $event['Event']['user_id'] == $me['id'] && $event['Orgc']['id'] == $me['org_id']) || ($isAclModifyOrg && $event['Orgc']['id'] == $me['org_id']));
-    $mayPublish = ($isAclPublish && $event['Orgc']['id'] == $me['org_id']);
-    $mayChangeCorrelation = !Configure::read('MISP.completely_disable_correlation') && ($isSiteAdmin || ($mayModify && Configure::read('MISP.allow_disabling_correlation')));
+    $mayChangeCorrelation = $this->Acl->canDisableCorrelation($event);
     $possibleAction = $mayModify ? 'attribute' : 'shadow_attribute';
-    $all = false;
-    if (isset($this->params->params['paging']['Event']['page'])) {
-        if ($this->params->params['paging']['Event']['page'] == 0) $all = true;
-        $page = $this->params->params['paging']['Event']['page']; // $page is probably unused
-    } else {
-        $page = 0; // $page is probably unused
-    }
-    $fieldCount = 11;
-    $filtered = false;
-    if(isset($passedArgsArray)){
-        if (count($passedArgsArray) > 0) {
-            $filtered = true;
-        }
-    }
+    $all = isset($this->params->params['paging']['Event']['page']) && $this->params->params['paging']['Event']['page'] == 0;
+    $fieldCount = 10;
 ?>
     <div class="pagination">
         <ul>
@@ -33,6 +12,7 @@
                 $focus = $params['focus'];
             }
             unset($params['focus']);
+            $params += $advancedFilteringActiveRules;
             $url = array_merge(array('controller' => 'events', 'action' => 'viewEventAttributes', $event['Event']['id']), $params);
             $this->Paginator->options(array(
                 'url' => $url,
@@ -43,7 +23,7 @@
             $paginatorLinks .= $this->Paginator->next(__('next') . ' &raquo;', array('tag' => 'li', 'escape' => false), null, array('tag' => 'li', 'class' => 'next disabled', 'escape' => false, 'disabledTag' => 'span'));
             echo $paginatorLinks;
         ?>
-        <li class="all <?php if ($all) echo 'disabled'; ?>">
+        <li class="all<?php if ($all) echo ' disabled'; ?>">
             <?php
                 if ($all):
                     echo '<span class="red">' . __('view all') . '</span>';
@@ -63,13 +43,12 @@
         echo $this->Form->create('Attribute', array('id' => 'delete_selected', 'url' => $deleteSelectedUrl));
         echo $this->Form->input('ids_delete', array(
             'type' => 'text',
-            'value' => 'test',
+            'value' => '',
             'style' => 'display:none;',
             'label' => false,
         ));
         echo $this->Form->end();
-    ?>
-        <?php
+
         echo $this->Form->create('ShadowAttribute', array('id' => 'accept_selected', 'url' => $baseurl . '/shadow_attributes/acceptSelected/' . $event['Event']['id']));
         echo $this->Form->input('ids_accept', array(
             'type' => 'text',
@@ -78,8 +57,7 @@
             'label' => false,
         ));
         echo $this->Form->end();
-    ?>
-        <?php
+
         echo $this->Form->create('ShadowAttribute', array('id' => 'discard_selected', 'url' => $baseurl . '/shadow_attributes/discardSelected/' . $event['Event']['id']));
         echo $this->Form->input('ids_discard', array(
             'type' => 'text',
@@ -91,26 +69,24 @@
         if (!isset($attributeFilter)) $attributeFilter = 'all';
     ?>
 </div>
-<div id="attributeList" class="attributeListContainer">
+<div id="tempnotecontainer"></div>
+<?php
+?>
+<div id="attributeList">
     <?php
-        $target = h($event['Event']['id']);
-        if ($extended) $target .= '/extended:1';
-        echo $this->element('eventattributetoolbar', array(
-            'target' => $target,
+        echo $this->element('eventattributetoolbar', [
             'attributeFilter' => $attributeFilter,
-            'urlHere' => $urlHere,
-            'filtered' => $filtered,
             'mayModify' => $mayModify,
             'possibleAction' => $possibleAction
-        ));
+        ]);
     ?>
     <table class="table table-striped table-condensed">
         <tr>
             <?php
                 if ($extended || ($mayModify && !empty($event['objects']))):
-                    $fieldCount += 1;
+                    $fieldCount++;
             ?>
-                    <th><input class="select_all" type="checkbox" title="<?php echo __('Select all');?>" role="button" tabindex="0" aria-label="<?php echo __('Select all attributes/proposals on current page');?>" onClick="toggleAllAttributeCheckboxes();" /></th>
+                    <th><input class="select_all" type="checkbox" title="<?php echo __('Select all');?>" role="button" tabindex="0" aria-label="<?php echo __('Select all attributes/proposals on current page');?>" onclick="toggleAllAttributeCheckboxes()"></th>
             <?php
                 endif;
             ?>
@@ -118,10 +94,13 @@
             <th class="context hidden">UUID</th>
             <th class="context hidden"><?= $this->Paginator->sort('first_seen', __('First seen')) ?> <i class="fas fa-arrow-right"></i> <?= $this->Paginator->sort('last_seen', __('Last seen')) ?></th>
             <th><?php echo $this->Paginator->sort('timestamp', __('Date'), array('direction' => 'desc'));?></th>
-            <?php if ($extended): ?>
+            <th class="context"><?= __('Context') ?></th>
+            <?php if ($extended || $extending): ?>
                 <th class="event_id"><?php echo $this->Paginator->sort('event_id', __('Event'));?></th>
             <?php endif; ?>
+            <?php if ($includeOrgColumn): $fieldCount++; ?>
             <th><?php echo $this->Paginator->sort('Org.name', __('Org')); ?>
+            <?php endif; ?>
             <th><?php echo $this->Paginator->sort('category');?></th>
             <th><?php echo $this->Paginator->sort('type');?></th>
             <th><?php echo $this->Paginator->sort('value');?></th>
@@ -130,13 +109,15 @@
                 if ($includeRelatedTags) {
                     echo sprintf('<th>%s</th>', __('Related Tags'));
                 }
-                $fieldCount += 1;
+                $fieldCount++;
             ?>
             <th><?php echo __('Galaxies');?></th>
             <th><?php echo $this->Paginator->sort('comment');?></th>
             <th><?php echo __('Correlate');?></th>
             <th><?php echo __('Related Events');?></th>
-            <th><?php echo __('Feed hits');?></th>
+            <?php if ($me['Role']['perm_view_feed_correlations']) { ?>
+                <th><?php echo __('Feed hits');?></th>
+            <?php } ?>
             <th title="<?php echo $attrDescriptions['signature']['desc'];?>"><?php echo $this->Paginator->sort('to_ids', 'IDS');?></th>
             <th title="<?php echo $attrDescriptions['distribution']['desc'];?>"><?php echo $this->Paginator->sort('distribution');?></th>
             <th><?php echo __('Sightings');?></th>
@@ -147,7 +128,7 @@
                         '<th>%s</th>',
                         __('SightingDB')
                     );
-                    $fieldCount += 1;
+                    $fieldCount++;
                 }
                 if ($includeDecayScore) {
                     echo sprintf(
@@ -155,7 +136,7 @@
                         __('Decaying Score'),
                         __('Score')
                     );
-                    $fieldCount += 1;
+                    $fieldCount++;
                 }
             ?>
             <th class="actions"><?php echo __('Actions');?></th>
@@ -168,9 +149,6 @@
                     'mayModify' => $mayModify,
                     'mayChangeCorrelation' => $mayChangeCorrelation,
                     'fieldCount' => $fieldCount,
-                    'includeRelatedTags' => !empty($includeRelatedTags) ? 1 : 0,
-                    'includeDecayingScore' => !empty($includeDecayingScore) ? 1 : 0,
-                    'includeSightingdb' => !empty($includeSightingdb) ? 1 : 0
                 ));
                 if (
                     ($object['objectType'] === 'attribute' && !empty($object['ShadowAttribute'])) ||
@@ -185,13 +163,13 @@
     </table>
     <?php
     // Generate form for adding sighting just once, generation for every attribute is surprisingly too slow
-    echo $this->Form->create('Sighting', ['id' => 'SightingForm', 'url' => $baseurl . '/sightings/add/', 'style' => 'display:none;']);
+    echo $this->Form->create('Sighting', ['id' => 'SightingForm', 'url' => $baseurl . '/sightings/add/', 'style' => 'display:none']);
     echo $this->Form->input('id', ['label' => false, 'type' => 'number']);
     echo $this->Form->input('type', ['label' => false]);
     echo $this->Form->end();
     ?>
 </div>
-    <?php if ($emptyEvent && (empty($attributeFilter) || $attributeFilter === 'all') && !$filtered): ?>
+    <?php if ($emptyEvent && (empty($attributeFilter) || $attributeFilter === 'all') && empty($passedArgsArray)): ?>
         <div class="background-red bold" style="padding: 2px 5px">
             <?php
                 if ($me['org_id'] != $event['Event']['orgc_id']) {
@@ -204,10 +182,15 @@ attributes or the appropriate distribution level. If you think there is a mistak
             ?>
         </div>
     <?php endif;?>
+    <p>
+        <?= $this->Paginator->counter([
+            'format' => __('Page {:page} of {:pages}, showing {:current} records out of {:count} total, starting on record {:start}, ending on {:end}')
+        ]); ?>
+    </p>
     <div class="pagination">
         <ul>
         <?= $paginatorLinks ?>
-        <li class="all <?php if ($all) echo 'disabled'; ?>">
+        <li class="all<?php if ($all) echo ' disabled'; ?>">
             <?php
                 if ($all):
                     echo '<span class="red">' . __('view all') . '</span>';
@@ -218,17 +201,65 @@ attributes or the appropriate distribution level. If you think there is a mistak
         </li>
         </ul>
     </div>
-<script type="text/javascript">
+<script>
     var currentUri = "<?php echo isset($currentUri) ? h($currentUri) : $baseurl . '/events/viewEventAttributes/' . h($event['Event']['id']); ?>";
     var currentPopover = "";
     var ajaxResults = {"hover": [], "persistent": []};
     var lastSelected = false;
     var deleted = <?php echo (!empty($deleted)) ? '1' : '0';?>;
     var includeRelatedTags = <?php echo (!empty($includeRelatedTags)) ? '1' : '0';?>;
-    $(function() {
-        $('.addGalaxy').click(function() {
-            addGalaxyListener(this);
+    $(document).ready(function() {
+        $('.analyst-data-fetcher').click(function() {
+            var $seed = $(this).data('seed');
+            var $object_uuid = $(this).data('object-uuid');
+            var $object_type = $(this).data('object-type');
+            var $that = this;
+            $.ajax({
+                type: 'GET',
+                url: baseurl + '/' + $object_type + '/viewAnalystData' + '/' + $object_uuid + '/' + $seed,
+                success:function (data) {
+                    $('#tempnotecontainer').html(data);
+                    window['openNotes' + $seed]($that);
+                }
+            });
+            
         });
+
+        $('[data-toggle="quickcollapse"').click(function() {
+            var $clicked = $(this)
+            toggleVisibilityForAttributes($clicked)
+        })
+    });
+
+    function toggleVisibilityForAttributes($button, show) {
+        var targetClass = $button.data('target')
+        var $targetElement = $(targetClass)
+        var $textElement = $button.find('.text')
+        var $iconElement = $button.find('.fa')
+        var shouldShow = show !== undefined ? show : ($targetElement[0].style.display)
+        if (shouldShow) {
+            $targetElement.show()
+            $textElement.text($textElement.data('text-hide'))
+            $iconElement.addClass($iconElement.data('class-hide')).removeClass($iconElement.data('class-show'))
+        } else {
+            $targetElement.hide()
+            $textElement.text($textElement.data('text-show'))
+            $iconElement.addClass($iconElement.data('class-show')).removeClass($iconElement.data('class-hide'))
+        }
+    }
+
+    function showAllAttributeInObjects() {
+        $('[data-toggle="quickcollapse"').each(function() {
+            toggleVisibilityForAttributes($(this), true)
+        })
+    }
+    function hideAllAttributeInObjects() {
+        $('[data-toggle="quickcollapse"').each(function() {
+            toggleVisibilityForAttributes($(this), false)
+        })
+    }
+
+    $(function() {
         <?php
             if (isset($focus)):
         ?>
@@ -236,23 +267,22 @@ attributes or the appropriate distribution level. If you think there is a mistak
         <?php
             endif;
         ?>
-        setContextFields();
         popoverStartup();
         $('.select_attribute').prop('checked', false).click(function(e) {
             if ($(this).is(':checked')) {
                 if (e.shiftKey) {
-                    selectAllInbetween(lastSelected, this.id);
+                    selectAllInbetween(lastSelected, this);
                 }
-                lastSelected = this.id;
+                lastSelected = this;
             }
             attributeListAnyAttributeCheckBoxesChecked();
         });
         $('.select_proposal').prop('checked', false).click(function(e){
             if ($(this).is(':checked')) {
                 if (e.shiftKey) {
-                    selectAllInbetween(lastSelected, this.id);
+                    selectAllInbetween(lastSelected, this);
                 }
-                lastSelected = this.id;
+                lastSelected = this;
             }
             attributeListAnyProposalCheckBoxesChecked();
         });
@@ -260,36 +290,8 @@ attributes or the appropriate distribution level. If you think there is a mistak
             attributeListAnyAttributeCheckBoxesChecked();
             attributeListAnyProposalCheckBoxesChecked();
         });
-        $('.correlation-toggle').click(function() {
-            var attribute_id = $(this).data('attribute-id');
-            getPopup(attribute_id, 'attributes', 'toggleCorrelation', '', '#confirmation_box');
-            return false;
-        });
-        $('.toids-toggle').click(function() {
-            var attribute_id = $(this).data('attribute-id');
-            getPopup(attribute_id, 'attributes', 'toggleToIDS', '', '#confirmation_box');
-            return false;
-        });
-        $('.screenshot').click(function() {
-            screenshotPopup($(this).attr('src'), $(this).attr('title'));
-        });
-        $('.sightings_advanced_add').click(function() {
-            var selected = [];
-            var object_context = $(this).data('object-context');
-            var object_id = $(this).data('object-id');
-            if (object_id == 'selected') {
-                $(".select_attribute").each(function() {
-                    if ($(this).is(":checked")) {
-                        selected.push($(this).data("id"));
-                    }
-                });
-                object_id = selected.join('|');
-            }
-            url = "<?php echo $baseurl; ?>" + "/sightings/advanced/" + object_id + "/" + object_context;
-            genericPopup(url, '#popover_box');
-        });
     });
     $('.searchFilterButton, #quickFilterButton').click(function() {
-        filterAttributes('value', '<?php echo h($event['Event']['id']); ?>');
+        filterAttributes('value');
     });
 </script>

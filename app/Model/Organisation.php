@@ -75,19 +75,33 @@ class Organisation extends AppModel
         ),
     );
 
-    public $organisationAssociations = array(
-            'Correlation' => array('table' => 'correlations', 'fields' => array('org_id')),
-            'Event' => array('table' => 'events', 'fields' => array('org_id', 'orgc_id')),
-            'Job' => array('table' => 'jobs', 'fields' => array('org_id')),
-            'Server' => array('table' => 'servers', 'fields' => array('org_id', 'remote_org_id')),
-            'ShadowAttribute' =>array('table' => 'shadow_attributes', 'fields' => array('org_id', 'event_org_id')),
-            'SharingGroup' => array('table' => 'sharing_groups', 'fields' => array('org_id')),
-            'SharingGroupOrg' => array('table' => 'sharing_group_orgs', 'fields' => array('org_id')),
-            'Thread' => array('table' => 'threads', 'fields' => array('org_id')),
-            'User' => array('table' => 'users', 'fields' => array('org_id'))
+    const ORGANISATION_ASSOCIATIONS = array(
+        'AccessLog' => array('table' => 'access_logs', 'fields' => array('org_id')),
+        'AuditLog' => array('table' => 'audit_logs', 'fields' => array('org_id')),
+        'Correlation' => array('table' => 'correlations', 'fields' => array('org_id')),
+        'Cerebrate' => array('table' => 'cerebrates', 'fields' => array('org_id')),
+        'Dashboard' => array('table' => 'dashboards', 'fields' => array('restrict_to_org_id')),
+        'Event' => array('table' => 'events', 'fields' => array('org_id', 'orgc_id')),
+        'EventGraph' => array('table' => 'event_graph', 'fields' => array('org_id')),
+        'Feed' => array('table' => 'feeds', 'fields' => array('orgc_id')),
+        'GalaxyCluster' => array('table' => 'galaxy_clusters', 'fields' => array('org_id', 'orgc_id')),
+        'ObjectTemplate' => array('table' => 'object_templates', 'fields' => array('org_id')),
+        'Job' => array('table' => 'jobs', 'fields' => array('org_id')),
+        'RestClientHistory' => array('table' => 'rest_client_histories', 'fields' => array('org_id')),
+        'Server' => array('table' => 'servers', 'fields' => array('org_id', 'remote_org_id')),
+        'ShadowAttribute' => array('table' => 'shadow_attributes', 'fields' => array('org_id', 'event_org_id')),
+        'SharingGroup' => array('table' => 'sharing_groups', 'fields' => array('org_id')),
+        'SharingGroupOrg' => array('table' => 'sharing_group_orgs', 'fields' => array('org_id')),
+        'SharingGroupBlueprint' => array('table' => 'sharing_group_blueprints', 'fields' => array('org_id')),
+        'Sighting' => array('table' => 'sightings', 'fields' => array('org_id')),
+        'SightingdbOrg' => array('table' => 'sightingdb_orgs', 'fields' => array('org_id')),
+        'Thread' => array('table' => 'threads', 'fields' => array('org_id')),
+        'Tag' => array('table' => 'tags', 'fields' => array('org_id')),
+        'TagCollection' => array('table' => 'tag_collections', 'fields' => array('org_id')),
+        'User' => array('table' => 'users', 'fields' => array('org_id'))
     );
 
-    public $genericMISPOrganisation = array(
+    const GENERIC_MISP_ORGANISATION = [
         'id' => '0',
         'name' => 'MISP',
         'date_created' => '',
@@ -102,37 +116,38 @@ class Organisation extends AppModel
         'local' => true,
         'restricted_to_domain' => [],
         'landingpage' => null
-    );
+    ];
 
     public function beforeValidate($options = array())
     {
         parent::beforeValidate();
-        if (empty($this->data['Organisation']['uuid'])) {
-            $this->data['Organisation']['uuid'] = CakeText::uuid();
+        $org = &$this->data[$this->alias];
+        if (empty($org['uuid'])) {
+            $org['uuid'] = CakeText::uuid();
         } else {
-            $this->data['Organisation']['uuid'] = strtolower(trim($this->data['Organisation']['uuid']));
+            $org['uuid'] = strtolower(trim($org['uuid']));
         }
         $date = date('Y-m-d H:i:s');
-        if (array_key_exists('restricted_to_domain', $this->data['Organisation'])) {
-            if (!is_array($this->data['Organisation']['restricted_to_domain'])) {
-                $this->data['Organisation']['restricted_to_domain'] = str_replace("\r", '', $this->data['Organisation']['restricted_to_domain']);
-                $this->data['Organisation']['restricted_to_domain'] = explode("\n", $this->data['Organisation']['restricted_to_domain']);
+        if (array_key_exists('restricted_to_domain', $org)) {
+            if (!is_array($org['restricted_to_domain'])) {
+                $org['restricted_to_domain'] = str_replace("\r", '', $org['restricted_to_domain']);
+                $org['restricted_to_domain'] = explode("\n", $org['restricted_to_domain']);
             }
 
-            $this->data['Organisation']['restricted_to_domain'] = array_values(
+            $org['restricted_to_domain'] = array_values(
                 array_filter(
-                    array_map('trim', $this->data['Organisation']['restricted_to_domain'])
+                    array_map('trim', $org['restricted_to_domain'])
                 )
             );
 
-            $this->data['Organisation']['restricted_to_domain'] = json_encode($this->data['Organisation']['restricted_to_domain']);
+            $org['restricted_to_domain'] = json_encode($org['restricted_to_domain']);
         }
-        if (!isset($this->data['Organisation']['id'])) {
-            $this->data['Organisation']['date_created'] = $date;
+        if (!isset($org['id'])) {
+            $org['date_created'] = $date;
         }
-        $this->data['Organisation']['date_modified'] = $date;
-        if (!isset($this->data['Organisation']['nationality']) || empty($this->data['Organisation']['nationality'])) {
-            $this->data['Organisation']['nationality'] = '';
+        $org['date_modified'] = $date;
+        if (empty($org['nationality'])) {
+            $org['nationality'] = '';
         }
         return true;
     }
@@ -150,7 +165,7 @@ class Organisation extends AppModel
 
     public function afterSave($created, $options = array())
     {
-        if (Configure::read('Plugin.ZeroMQ_enable') && Configure::read('Plugin.ZeroMQ_organisation_notifications_enable')) {
+        if ($this->pubToZmq('organisation')) {
             $pubSubTool = $this->getPubSubTool();
             $pubSubTool->modified($this->data, 'organisation');
         }
@@ -181,7 +196,7 @@ class Organisation extends AppModel
      * @return int Organisation ID
      * @throws Exception
      */
-    public function captureOrg($org, array $user, $force = false)
+    public function captureOrg($org, array $user, $force = false, $returnUUID = false)
     {
         $fieldsToFetch = $force ?
             ['id', 'uuid', 'type', 'date_created', 'date_modified', 'nationality', 'sector', 'contacts'] :
@@ -206,13 +221,10 @@ class Organisation extends AppModel
             'fields' => $fieldsToFetch,
         ));
         if (empty($existingOrg)) {
-            $date = date('Y-m-d H:i:s');
             $organisation = array(
                 'name' => $name,
                 'local' => 0,
                 'created_by' => $user['id'],
-                'date_modified' => $date,
-                'date_created' => $date
             );
             // If we have the UUID set, then we have only made sure that the org doesn't exist by UUID
             // We want to create a new organisation for pushed data, even if the same org name exists
@@ -226,20 +238,20 @@ class Organisation extends AppModel
             }
             $this->create();
             $this->save($organisation);
-            return $this->id;
+            return $returnUUID ? $organisation['uuid'] : $this->id;
         } else {
             $changed = false;
-            if (isset($org['uuid']) && empty($existingOrg['Organisation']['uuid'])) {
-                $existingOrg['Organisation']['uuid'] = $org['uuid'];
+            if (isset($org['uuid']) && empty($existingOrg[$this->alias]['uuid'])) {
+                $existingOrg[$this->alias]['uuid'] = $org['uuid'];
                 $changed = true;
             }
-            if ($force) {
+            if ($force && (!empty($user['Role']['perm_site_admin']) || !empty($user['Role']['perm_sync']))) {
                 $fields = array('type', 'date_created', 'date_modified', 'nationality', 'sector', 'contacts');
                 foreach ($fields as $field) {
                     if (isset($org[$field])) {
-                        if ($existingOrg['Organisation'][$field] != $org[$field]) {
-                            $existingOrg['Organisation'][$field] = $org[$field];
-                            if ($field != 'date_modified') {
+                        if ($existingOrg[$this->alias][$field] != $org[$field]) {
+                            $existingOrg[$this->alias][$field] = $org[$field];
+                            if ($field !== 'date_modified') {
                                 $changed = true;
                             }
                         }
@@ -250,17 +262,18 @@ class Organisation extends AppModel
                 $this->save($existingOrg);
             }
         }
-        return $existingOrg[$this->alias]['id'];
+        return $returnUUID ? $existingOrg[$this->alias]['uuid']: $existingOrg[$this->alias]['id'];
     }
 
     /**
      * @param string $name Organisation name
      * @param int $userId Organisation creator
      * @param bool $local True if organisation should be marked as local
+     * @param string|null $uuid UUID of newly created org
      * @return int Existing or newly created organisation ID
      * @throws Exception
      */
-    public function createOrgFromName($name, $userId, $local)
+    public function createOrgFromName($name, $userId, $local, $uuid = null)
     {
         $existingOrg = $this->find('first', [
             'recursive' => -1,
@@ -274,7 +287,12 @@ class Organisation extends AppModel
                 'local' => $local,
                 'created_by' => $userId,
             ];
-            $this->save($organisation);
+            if ($uuid) {
+                $organisation['uuid'] = $uuid;
+            }
+            if (!$this->save($organisation)) {
+                throw new Exception("Could not create new org $name");
+            }
             return $this->id;
         }
         return $existingOrg[$this->alias]['id'];
@@ -283,6 +301,9 @@ class Organisation extends AppModel
     public function orgMerge($id, $request, $user)
     {
         $currentOrg = $this->find('first', array('recursive' => -1, 'conditions' => array('Organisation.id' => $id)));
+        if (isset($currentOrg['Organisation']['restricted_to_domain'])) {
+            $currentOrg['Organisation']['restricted_to_domain'] = json_encode($currentOrg['Organisation']['restricted_to_domain']);
+        }
         $currentOrgUserCount = $this->User->find('count', array(
             'conditions' => array('User.org_id' => $id)
         ));
@@ -299,8 +320,6 @@ class Organisation extends AppModel
         }
         $dir = new Folder();
         $this->Log = ClassRegistry::init('Log');
-        $dataSourceConfig = ConnectionManager::getDataSource('default')->config;
-        $dataSource = $dataSourceConfig['datasource'];
         $dirPath = APP . 'tmp' . DS . 'logs' . DS . 'merges';
         if (!$dir->create($dirPath)) {
             throw new MethodNotAllowedException('Merge halted because the log directory (default: /var/www/MISP/app/tmp/logs/merges) could not be created. This is most likely a permission issue, make sure that MISP can write to the logs directory and try again.');
@@ -313,14 +332,14 @@ class Organisation extends AppModel
         if (!$backupFile->create()) {
             throw new MethodNotAllowedException('Merge halted because the backup script file (default location: /var/www/MISP/app/tmp/logs/merges/[old_org_id]_[new_org_id]_timestamp.sql) could not be created. This is most likely a permission issue, make sure that MISP can write to the logs directory and try again.');
         }
-        if ($dataSource == 'Database/Mysql') {
+        if ($this->isMysql()) {
             $sql = 'INSERT INTO organisations (`' . implode('`, `', array_keys($currentOrg['Organisation'])) . '`) VALUES (\'' . implode('\', \'', array_values($currentOrg['Organisation'])) . '\');';
-        } elseif ($dataSource == 'Database/Postgres') {
+        } else {
             $sql = 'INSERT INTO organisations ("' . implode('", "', array_keys($currentOrg['Organisation'])) . '") VALUES (\'' . implode('\', \'', array_values($currentOrg['Organisation'])) . '\');';
         }
         $backupFile->append($sql . PHP_EOL);
         $this->Log->create();
-        $this->Log->save(array(
+        $this->Log->saveOrFailSilently(array(
                 'org' => $user['Organisation']['name'],
                 'model' => 'Organisation',
                 'model_id' => $currentOrg['Organisation']['id'],
@@ -332,11 +351,11 @@ class Organisation extends AppModel
         ));
         $dataMoved = array('removed_org' => $currentOrg);
         $success = true;
-        foreach ($this->organisationAssociations as $model => $data) {
+        foreach (self::ORGANISATION_ASSOCIATIONS as $model => $data) {
             foreach ($data['fields'] as $field) {
-                if ($dataSource == 'Database/Mysql' || $dataSource == 'Database/MysqlObserver') {
+                if ($this->isMysql()) {
                     $sql = 'SELECT `id` FROM `' . $data['table'] . '` WHERE `' . $field . '` = "' . $currentOrg['Organisation']['id'] . '"';
-                } elseif ($dataSource == 'Database/Postgres') {
+                } else {
                     $sql = 'SELECT "id" FROM "' . $data['table'] . '" WHERE "' . $field . '" = "' . $currentOrg['Organisation']['id'] . '"';
                 }
                 $temp = $this->query($sql);
@@ -345,19 +364,19 @@ class Organisation extends AppModel
                     if (!empty($dataMoved['values_changed'][$model][$field])) {
                         $this->Log->create();
                         try {
-                            if ($dataSource == 'Database/Mysql' || $dataSource == 'Database/MysqlObserver') {
+                            if ($this->isMysql()) {
                                 $sql = 'UPDATE `' . $data['table'] . '` SET `' . $field . '` = ' . $targetOrg['Organisation']['id'] . ' WHERE `' . $field . '` = ' . $currentOrg['Organisation']['id'] . ';';
-                            } elseif ($dataSource == 'Database/Postgres') {
+                            } else {
                                 $sql = 'UPDATE "' . $data['table'] . '" SET "' . $field . '" = ' . $targetOrg['Organisation']['id'] . ' WHERE "' . $field . '" = ' . $currentOrg['Organisation']['id'] . ';';
                             }
                             $result = $this->query($sql);
-                            if ($dataSource == 'Database/Mysql' || $dataSource == 'Database/MysqlObserver') {
+                            if ($this->isMysql()) {
                                 $sql = 'UPDATE `' . $data['table'] . '` SET `' . $field . '` = ' . $currentOrg['Organisation']['id'] . ' WHERE `id` IN (' . implode(',', $dataMoved['values_changed'][$model][$field]) . ');';
-                            } elseif ($dataSource == 'Database/Postgres') {
+                            } else {
                                 $sql = 'UPDATE "' . $data['table'] . '" SET "' . $field . '" = ' . $currentOrg['Organisation']['id'] . ' WHERE "id" IN (' . implode(',', $dataMoved['values_changed'][$model][$field]) . ');';
                             }
                             $backupFile->append($sql . PHP_EOL);
-                            $this->Log->save(array(
+                            $this->Log->saveOrFailSilently(array(
                                     'org' => $user['Organisation']['name'],
                                     'model' => 'Organisation',
                                     'model_id' => $currentOrg['Organisation']['id'],
@@ -368,7 +387,7 @@ class Organisation extends AppModel
                                     'change' => '',
                             ));
                         } catch (Exception $e) {
-                            $this->Log->save(array(
+                            $this->Log->saveOrFailSilently(array(
                                     'org' => $user['Organisation']['name'],
                                     'model' => 'Organisation',
                                     'model_id' => $currentOrg['Organisation']['id'],
@@ -545,15 +564,13 @@ class Organisation extends AppModel
     public function createConditions(array $user)
     {
         if (!$user['Role']['perm_sharing_group'] && Configure::read('Security.hide_organisation_index_from_users')) {
-            $allowedOrgs = [$user['org_id']];
-
             $eventConditions = $this->Event->createEventConditions($user);
-            $orgsWithEvent = $this->Event->find('column', [
+            $allowedOrgs = $this->Event->find('column', [
                 'fields' => ['Event.orgc_id'],
                 'conditions' => $eventConditions,
                 'unique' => true,
             ]);
-            $allowedOrgs = array_merge($allowedOrgs, $orgsWithEvent);
+            $allowedOrgs[] = $user['org_id'];
 
             $proposalConditions = $this->Event->ShadowAttribute->buildConditions($user);
             // Do not check orgs that we already can see
@@ -581,8 +598,8 @@ class Organisation extends AppModel
         static $list;
         if (!$list) {
             try {
-                $content = FileAccessTool::readFromFile(APP . '/files/misp-galaxy/clusters/country.json');
-                $list = $this->jsonDecode($content)['values'];
+                $content = FileAccessTool::readJsonFromFile(APP . '/files/misp-galaxy/clusters/country.json');
+                $list = $content['values'];
             } catch (Exception $e) {
                 $this->logException("MISP Galaxy are not updated, countries will not be available.", $e, LOG_WARNING);
                 $list = [];

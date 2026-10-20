@@ -23,34 +23,35 @@
 App::uses('Model', 'Model');
 App::uses('LogableBehavior', 'Assets.models/behaviors');
 App::uses('RandomTool', 'Tools');
+App::uses('FileAccessTool', 'Tools');
+App::uses('JsonTool', 'Tools');
+App::uses('RedisTool', 'Tools');
+App::uses('BetterCakeEventManager', 'Tools');
+App::uses('Folder', 'Utility');
 
 class AppModel extends Model
 {
-    public $name;
-
     /** @var PubSubTool */
     private static $loadedPubSubTool;
 
     /** @var KafkaPubTool */
     private $loadedKafkaPubTool;
 
-    /** @var null|Redis */
-    private static $__redisConnection;
+    /** @var BackgroundJobsTool */
+    private static $loadedBackgroundJobsTool;
 
     private $__profiler = array();
-
-    public $elasticSearchClient = false;
 
     /** @var AttachmentTool|null */
     private $attachmentTool;
 
-    public function __construct($id = false, $table = null, $ds = null)
-    {
-        parent::__construct($id, $table, $ds);
+    /** @var Workflow|null */
+    private $Workflow;
 
-        $this->name = get_class($this);
-        $this->findMethods['column'] = true;
-    }
+    public $includeAnalystData;
+    public $includeAnalystDataRecursive;
+
+    private $dbiq = null;
 
     // deprecated, use $db_changes
     // major -> minor -> hotfix -> requires_logout
@@ -83,10 +84,22 @@ class AppModel extends Model
         51 => false, 52 => false, 53 => false, 54 => false, 55 => false, 56 => false,
         57 => false, 58 => false, 59 => false, 60 => false, 61 => false, 62 => false,
         63 => true, 64 => false, 65 => false, 66 => false, 67 => false, 68 => false,
-        69 => false, 70 => false, 71 => true, 72 => true,
+        69 => false, 70 => false, 71 => true, 72 => true, 73 => false, 74 => false,
+        75 => false, 76 => true, 77 => false, 78 => false, 79 => false, 80 => false,
+        81 => false, 82 => false, 83 => false, 84 => false, 85 => false, 86 => false,
+        87 => false, 88 => false, 89 => false, 90 => false, 91 => false, 92 => false,
+        93 => false, 94 => false, 95 => true, 96 => false, 97 => true, 98 => false,
+        99 => false, 100 => false, 101 => false, 102 => false, 103 => false, 104 => false,
+        105 => false, 106 => false, 107 => false, 108 => false, 109 => false, 110 => false,
+        111 => false, 112 => false, 113 => true, 114 => false, 115 => false, 116 => false,
+        117 => false, 118 => false, 119 => false, 120 => false, 121 => false, 122 => false,
+        123 => false, 124 => false, 125 => false, 126 => false, 127 => false, 128 => false,
+        129 => false, 130 => false, 131 => false, 132 => false, 133 => false, 134 => true,
+        135 => false, 136 => true, 137 => false, 138 => false, 139 => false, 140 => false,
+        141 => false
     );
 
-    public $advanced_updates_description = array(
+    const ADVANCED_UPDATES_DESCRIPTION = array(
         'seenOnAttributeAndObject' => array(
             'title' => 'First seen/Last seen Attribute table',
             'description' => 'Update the Attribute table to support first_seen and last_seen feature, with a microsecond resolution.',
@@ -100,17 +113,63 @@ class AppModel extends Model
         ),
     );
 
-    public function isAcceptedDatabaseError($errorMessage, $dataSource)
+    public function __construct($id = false, $table = null, $ds = null)
     {
-        $isAccepted = false;
-        if ($dataSource == 'Database/Mysql' || $dataSource == 'Database/MysqlObserver') {
+        parent::__construct($id, $table, $ds);
+        $this->findMethods['column'] = true;
+        if (in_array('phar', stream_get_wrappers(), true)) {
+            stream_wrapper_unregister('phar');
+        }
+    }
+
+    /**
+     * Model::set() treats a non-empty key matching the model alias as the record and drops the
+     * other top-level scalars, so a flat record carrying an injected alias key is saved in place
+     * of the sanitised one. Which half such a payload means cannot be told apart here: refuse it.
+     */
+    public function save($data = null, $validate = true, $fieldList = array())
+    {
+        if (is_array($data) && !empty($data[$this->alias]) && is_array($data[$this->alias])) {
+            foreach ($data as $key => $value) {
+                if ($key !== $this->alias && !is_array($value)) {
+                    $this->log(
+                        sprintf(
+                            'Refused a %s save: the record is flat but also carries a nested %s key.',
+                            $this->alias,
+                            $this->alias
+                        ),
+                        LOG_WARNING
+                    );
+                    return false;
+                }
+            }
+        }
+        return parent::save($data, $validate, $fieldList);
+    }
+
+    public function dbiq()
+    {
+        if (!empty($this->dbiq)) {
+            return $this->dbiq;
+        }
+        $db = ConnectionManager::getDataSource('default');
+        if (!empty($db->dbiq)) {
+            $this->dbiq = $db->dbiq;
+            return $this->dbiq;
+        }
+        return '`';
+    }
+
+    public function isAcceptedDatabaseError($errorMessage)
+    {
+        if ($this->isMysql()) {
             $errorDuplicateColumn = 'SQLSTATE[42S21]: Column already exists: 1060 Duplicate column name';
             $errorDuplicateIndex = 'SQLSTATE[42000]: Syntax error or access violation: 1061 Duplicate key name';
             $errorDropIndex = "/SQLSTATE\[42000\]: Syntax error or access violation: 1091 Can't DROP '[\w]+'; check that column\/key exists/";
             $isAccepted = substr($errorMessage, 0, strlen($errorDuplicateColumn)) === $errorDuplicateColumn ||
                             substr($errorMessage, 0, strlen($errorDuplicateIndex)) === $errorDuplicateIndex ||
                             preg_match($errorDropIndex, $errorMessage) !== 0;
-        } elseif ($dataSource == 'Database/Postgres') {
+        } else {
             $errorDuplicateColumn = '/ERROR:  column "[\w]+" specified more than once/';
             $errorDuplicateIndex = '/ERROR: relation "[\w]+" already exists/';
             $errorDropIndex = '/ERROR: index "[\w]+" does not exist/';
@@ -130,8 +189,9 @@ class AppModel extends Model
         switch ($command) {
             case '2.4.20':
                 $dbUpdateSuccess = $this->updateDatabase($command);
-                $this->ShadowAttribute = ClassRegistry::init('ShadowAttribute');
-                $this->ShadowAttribute->upgradeToProposalCorrelation();
+                //deprecated
+                //$this->ShadowAttribute = ClassRegistry::init('ShadowAttribute');
+                //$this->ShadowAttribute->upgradeToProposalCorrelation();
                 break;
             case '2.4.25':
                 $dbUpdateSuccess = $this->updateDatabase($command);
@@ -220,6 +280,52 @@ class AppModel extends Model
             case 48:
                 $dbUpdateSuccess = $this->__generateCorrelations();
                 break;
+            case 89:
+                $this->__retireOldCorrelationEngine();
+                $dbUpdateSuccess = true;
+                break;
+            case 90:
+                $dbUpdateSuccess = $this->updateDatabase($command);
+                $this->Workflow = Classregistry::init('Workflow');
+                $this->Workflow->enableDefaultModules();
+                break;
+            case 91:
+                $existing_index = $this->query(
+                    "SHOW INDEX FROM default_correlations WHERE Key_name = 'unique_correlation';"
+                );
+                if (empty($existing_index)) {
+                    // If there are duplicate entries, the query creating the `unique_correlation` index will result in an integrity constraint violation.
+                    // The query below cleans up potential duplicates before creating the constraint.
+                    $this->removeDuplicateCorrelationEntries('default_correlations');
+                    $this->query(
+                        "ALTER TABLE default_correlations
+                        ADD CONSTRAINT unique_correlation
+                        UNIQUE KEY(attribute_id, 1_attribute_id, value_id);"
+                    );
+                }
+                $existing_index = $this->query(
+                    "SHOW INDEX FROM no_acl_correlations WHERE Key_name = 'unique_correlation';"
+                );
+                if (empty($existing_index)) {
+                    $this->removeDuplicateCorrelationEntries('no_acl_correlations');
+                    $this->query(
+                        "ALTER TABLE no_acl_correlations
+                        ADD CONSTRAINT unique_correlation
+                        UNIQUE KEY(attribute_id, 1_attribute_id, value_id);"
+                    );
+                }
+                $dbUpdateSuccess = true;
+                break;
+            case 96:
+                $this->removeDuplicatedUUIDs();
+                $dbUpdateSuccess = $this->updateDatabase('createUUIDsConstraints');
+                break;
+            case 120:
+                $dbUpdateSuccess = $this->moveImages();
+                break;
+            case 139:
+                $dbUpdateSuccess = $this->fixUpdatedGalaxyID();
+                break;
             default:
                 $dbUpdateSuccess = $this->updateDatabase($command);
                 break;
@@ -246,20 +352,20 @@ class AppModel extends Model
         $result = $this->Feed->addDefaultFeeds($feeds);
         $this->Log->create();
         $entry = array(
-                'org' => 'SYSTEM',
-                'model' => 'Server',
-                'model_id' => 0,
-                'email' => 'SYSTEM',
-                'action' => 'update_database',
-                'user_id' => 0,
-                'title' => 'Added new default feeds.'
+            'org' => 'SYSTEM',
+            'model' => 'Server',
+            'model_id' => 0,
+            'email' => 'SYSTEM',
+            'action' => 'update_database',
+            'user_id' => 0,
+            'title' => 'Added new default feeds.'
         );
         if ($result) {
             $entry['change'] = 'Feeds added: ' . $feedNames;
         } else {
             $entry['change'] = 'Tried adding new feeds but something went wrong.';
         }
-        $this->Log->save($entry);
+        $this->Log->saveOrFailSilently($entry);
     }
 
     // SQL scripts for updates
@@ -269,13 +375,11 @@ class AppModel extends Model
 
         $liveOff = false;
         $exitOnError = false;
-        if (isset($this->advanced_updates_description[$command])) {
-            $liveOff = isset($this->advanced_updates_description[$command]['liveOff']) ? $this->advanced_updates_description[$command]['liveOff'] : $liveOff;
-            $exitOnError = isset($this->advanced_updates_description[$command]['exitOnError']) ? $this->advanced_updates_description[$command]['exitOnError'] : $exitOnError;
+        if (isset(self::ADVANCED_UPDATES_DESCRIPTION[$command])) {
+            $liveOff = isset(self::ADVANCED_UPDATES_DESCRIPTION[$command]['liveOff']) ? self::ADVANCED_UPDATES_DESCRIPTION[$command]['liveOff'] : $liveOff;
+            $exitOnError = isset(self::ADVANCED_UPDATES_DESCRIPTION[$command]['exitOnError']) ? self::ADVANCED_UPDATES_DESCRIPTION[$command]['exitOnError'] : $exitOnError;
         }
 
-        $dataSourceConfig = ConnectionManager::getDataSource('default')->config;
-        $dataSource = $dataSourceConfig['datasource'];
         $sqlArray = array();
         $indexArray = array();
         $clean = true;
@@ -448,6 +552,233 @@ class AppModel extends Model
                     KEY `org_id` (`org_id`),
                     KEY `event_id` (`event_id`)
                     ) ENGINE=InnoDB DEFAULT CHARSET=utf8;";
+                break;
+            case 'highPerformanceIndexingEvents':
+                $temp = "ALTER TABLE events";
+                $notEmpty = false;
+                $indeces = [
+                    'idx_evt_acl' => '(distribution, sharing_group_id)',
+                    'idx_evt_ts_pub' => '(timestamp, published)',
+                    'idx_evt_id_acl' => '(id, org_id, distribution, sharing_group_id)',
+                ];
+                $indeces_to_delete = [
+                    'sharing_group_id'
+                ];
+                foreach ($indeces as $index => $data) {
+                    if (!$this->checkNamedIndexExists('events', $index)) {
+                        $temp .= " ADD INDEX $index $data,";
+                        $notEmpty = true;
+                    }
+                }
+                foreach ($indeces_to_delete as $index) {
+                    if ($this->checkNamedIndexExists('events', $index)) {
+                        $temp .= " DROP INDEX $index,";
+                        $notEmpty = true;
+                    }
+                }
+                if ($notEmpty) {
+                    $temp = rtrim($temp, ',') . " ;";
+                    $sqlArray[] = $temp;
+                }
+                break;
+            case 'highPerformanceIndexingAttributes':
+                $temp = "ALTER TABLE attributes";
+                $notEmpty = false;
+                $indeces = [
+                    'idx_attr_acl_type' => '(event_id, distribution, sharing_group_id, deleted, type(16))',
+                    'idx_attr_type_ts' => '(type(16), timestamp)',
+                    'idx_attr_type_event' => '(type(16), event_id)',
+                    'idx_attr_value_combo' => '(value1(64), value2(64))',
+                    'idx_attr_value1_only' => '(value1(64))',
+                    'idx_attr_value2_only' => '(value2(64))',
+                    'idx_attr_obj_dist' => '(object_id, distribution)',
+                    'idx_attr_evt_dist' => '(event_id, distribution)',
+                    'idx_attr_objrel_acl' => '(object_relation(32), event_id, distribution, sharing_group_id, deleted)',
+                ];
+                $indeces_to_delete = [
+                    'deleted',
+                    'value1',
+                    'value2',
+                    'type',
+                    'event_id',
+                    'object_id',
+                    'object_relation'
+                ];
+                foreach ($indeces as $index => $data) {
+                    if (!$this->checkNamedIndexExists('attributes', $index)) {
+                        $temp .= " ADD INDEX $index $data,";
+                        $notEmpty = true;
+                    }
+                }
+                foreach ($indeces_to_delete as $index) {
+                    if ($this->checkNamedIndexExists('attributes', $index)) {
+                        $temp .= " DROP INDEX $index,";
+                        $notEmpty = true;
+                    }
+                }
+                if ($notEmpty) {
+                    $temp = rtrim($temp, ',') . " ;";
+                    $sqlArray[] = $temp;
+                }
+                break;
+            case 'highPerformanceIndexingObjects':
+                $temp = "ALTER TABLE objects";
+                $notEmpty = false;
+                $indeces = [
+                    'idx_obj_acl' => '(event_id, distribution, sharing_group_id, deleted)',
+                    'idx_obj_id_acl' => '(id, event_id, distribution)',
+                    'idx_obj_meta' => '(' . $this->dbiq() . 'meta-category' . $this->dbiq() . '(16), timestamp)'
+                ];
+                $indeces_to_delete = [
+                    'event_id',
+                    'distribution',
+                    'sharing_group_id',
+                    $this->dbiq() . 'meta-category' . $this->dbiq()
+                ];
+                foreach ($indeces as $index => $data) {
+                    if (!$this->checkNamedIndexExists('objects', $index)) {
+                        $temp .= " ADD INDEX $index $data,";
+                        $notEmpty = true;
+                    }
+                }
+                foreach ($indeces_to_delete as $index) {
+                    if ($this->checkNamedIndexExists('objects', $index)) {
+                        $temp .= " DROP INDEX $index,";
+                        $notEmpty = true;
+                    }
+                }
+                if ($notEmpty) {
+                    $temp = rtrim($temp, ',') . " ;";
+                    $sqlArray[] = $temp;
+                }
+                break;
+            case 'highPerformanceIndexingDefaultCorrelations':
+                $temp = "ALTER TABLE default_correlations";
+                $notEmpty = false;
+                $indeces = [
+                    'idx_corr_acl_src' => '(object_id, org_id, distribution, sharing_group_id, event_distribution, event_sharing_group_id)',
+                    'idx_corr_acl_dst' => '(1_object_id, 1_org_id, 1_distribution, 1_sharing_group_id, 1_event_distribution, 1_event_sharing_group_id)',
+                    'idx_corr_acl_src_obj' => '(object_id, org_id, distribution, sharing_group_id, object_distribution, object_sharing_group_id, event_distribution, event_sharing_group_id)',
+                    'idx_corr_acl_dst_obj' => '(1_object_id, 1_org_id, 1_distribution, 1_sharing_group_id, 1_object_distribution, 1_object_sharing_group_id, 1_event_distribution, 1_event_sharing_group_id)',
+                    'idx_corr_evt_1evt'   => '(event_id, 1_event_id)',
+                ];
+                foreach ($indeces as $index => $data) {
+                    if (!$this->checkNamedIndexExists('default_correlations', $index)) {
+                        $temp .= " ADD INDEX $index $data,";
+                        $notEmpty = true;
+                    }
+                }
+                if ($notEmpty) {
+                    $temp = rtrim($temp, ',') . " ;";
+                    $sqlArray[] = $temp;
+                }
+            break;
+            case 'highPerformanceIndexingNoAclCorrelations':
+                $temp = "ALTER TABLE no_acl_correlations";
+                $notEmpty = false;
+                $indeces = [
+                    'idx_nac_attr_evt'    => '(attribute_id, event_id)',
+                    'idx_nac_1attr_1evt'  => '(1_attribute_id, 1_event_id)',
+                    'idx_nac_val_attr'    => '(value_id, attribute_id)',
+                    'idx_nac_val_1attr'   => '(value_id, 1_attribute_id)',
+                    'idx_nac_evt_1evt'   => '(event_id, 1_event_id)',
+                ];
+                foreach ($indeces as $index => $data) {
+                    if (!$this->checkNamedIndexExists('no_acl_correlations', $index)) {
+                        $temp .= " ADD INDEX $index $data,";
+                        $notEmpty = true;
+                    }
+                }
+                if ($notEmpty) {
+                    $temp = rtrim($temp, ',') . " ;";
+                    $sqlArray[] = $temp;
+                }
+                break;
+            case 'highPerformanceIndexingConnectorTags':
+                $indeces = [
+                    'event_tags' => [
+                        'idx_event_tags_event_tag' => '(event_id, tag_id)'
+                    ],
+                    'attribute_tags' => [
+                        'idx_attr_tags_event_tag' => '(event_id, tag_id)',
+                        'idx_attr_tags_attr_tag' => '(attribute_id, tag_id)'
+                    ]
+                ];
+                foreach ($indeces as $table => $indexes) {
+                    $temp = "ALTER TABLE $table";
+                    $notEmpty = false;
+                    foreach ($indexes as $index => $data) {
+                        if (!$this->checkNamedIndexExists($table, $index)) {
+                            $temp .= " ADD INDEX $index $data,";
+                            $notEmpty = true;
+                        }
+                    }
+                    if ($notEmpty) {
+                        $temp = rtrim($temp, ',') . " ;";
+                        $sqlArray[] = $temp;
+                    }
+                }
+                break;
+            case 'highPerformanceIndexWarninglists':
+                $indeces = [
+                    'warninglist_entries' => [
+                        'idx_warn_values' => '(value(64))'
+                    ]
+                ];
+                foreach ($indeces as $table => $indexes) {
+                    $temp = "ALTER TABLE $table";
+                    $notEmpty = false;
+                    foreach ($indexes as $index => $data) {
+                        if (!$this->checkNamedIndexExists($table, $index)) {
+                            $temp .= " ADD INDEX $index $data,";
+                            $notEmpty = true;
+                        }
+                    }
+                    if ($notEmpty) {
+                        $temp = rtrim($temp, ',') . " ;";
+                        $sqlArray[] = $temp;
+                    }
+                }
+                break;
+            case 'highPerformanceLogSearchIndexing':
+                $temp = "ALTER TABLE logs";
+                $notEmpty = false;
+                $indeces = [
+                    'idx_logs_org' => '(org(64))',
+                    'idx_logs_email' => '(email(64))',
+                    'idx_logs_model' => '(model(32))',
+                    'idx_logs_model_id' => '(model(32), model_id)',
+                    'idx_logs_action' => '(action(16))',
+                    'idx_logs_created' => '(created)',
+                ];
+                foreach ($indeces as $index => $data) {
+                    if (!$this->checkNamedIndexExists('logs', $index)) {
+                        $temp .= " ADD INDEX $index $data,";
+                        $notEmpty = true;
+                    }
+                }
+                if ($notEmpty) {
+                    $temp = rtrim($temp, ',') . " ;";
+                    $sqlArray[] = $temp;
+                }
+                break;
+            case 'OnDemandCorrelationTuning':
+                $indeces = [
+                    'idx_val1_source' => '(event_id, value1(64), deleted, disable_correlation, type, id)',
+                    'idx_val1_target' => '(value1(64), event_id, deleted, disable_correlation, type, id)',
+                    'idx_val2_source' => '(event_id, value2(64), deleted, disable_correlation, type, id)',
+                    'idx_val2_target' => '(value2(64), event_id, deleted, disable_correlation, type, id)'
+                ];
+                foreach ($indeces as $index => $data) {
+                    if (!$this->checkNamedIndexExists('logs', $index)) {
+                        $temp .= " ADD INDEX $index $data,";
+                        $notEmpty = true;
+                    }
+                }
+                if ($notEmpty) {
+                    $temp = rtrim($temp, ',') . " ;";
+                    $sqlArray[] = $temp;
+                }
                 break;
             case '2.4.19':
                 $sqlArray[] = "DELETE FROM `shadow_attributes` WHERE `event_uuid` = '';";
@@ -702,7 +1033,7 @@ class AppModel extends Model
                 $sqlArray[] = "ALTER TABLE taxonomy_predicates ADD colour varchar(7) CHARACTER SET utf8 COLLATE utf8_bin NOT NULL DEFAULT '';";
                 break;
             case '2.4.60':
-                if ($dataSource == 'Database/Mysql' || $dataSource == 'Database/MysqlObserver') {
+                if ($this->isMysql()) {
                     $sqlArray[] = 'CREATE TABLE IF NOT EXISTS `attribute_tags` (
                                 `id` int(11) NOT NULL AUTO_INCREMENT,
                                 `attribute_id` int(11) NOT NULL,
@@ -713,7 +1044,7 @@ class AppModel extends Model
                     $sqlArray[] = 'ALTER TABLE `attribute_tags` ADD INDEX `attribute_id` (`attribute_id`);';
                     $sqlArray[] = 'ALTER TABLE `attribute_tags` ADD INDEX `event_id` (`event_id`);';
                     $sqlArray[] = 'ALTER TABLE `attribute_tags` ADD INDEX `tag_id` (`tag_id`);';
-                } elseif ($dataSource == 'Database/Postgres') {
+                } else {
                     $sqlArray[] = 'CREATE TABLE IF NOT EXISTS attribute_tags (
                                 id bigserial NOT NULL,
                                 attribute_id bigint NOT NULL,
@@ -1533,7 +1864,7 @@ class AppModel extends Model
                     `value` text NOT NULL,
                     `from_json` tinyint(1) default 0,
                     PRIMARY KEY (`id`),
-                    UNIQUE INDEX `value` (`value`(255))
+                    UNIQUE INDEX `value` (`value`(191))
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;";
                 break;
             case 66:
@@ -1577,6 +1908,668 @@ class AppModel extends Model
                 break;
             case 72:
                 $sqlArray[] = "ALTER TABLE `auth_keys` ADD `read_only` tinyint(1) NOT NULL DEFAULT 0 AFTER `expiration`;";
+                break;
+            case 73:
+                $this->__dropIndex('user_settings', 'timestamp'); // index is not used
+                $sqlArray[] = "ALTER TABLE `user_settings` ADD UNIQUE INDEX `unique_setting` (`user_id`, `setting`)";
+                break;
+            case 74:
+                $sqlArray[] = "ALTER TABLE `users` MODIFY COLUMN `change_pw` tinyint(1) NOT NULL DEFAULT 0;";
+                break;
+            case 75:
+                $this->__addIndex('object_references', 'event_id');
+                $this->__dropIndex('object_references', 'timestamp');
+                $this->__dropIndex('object_references', 'source_uuid');
+                $this->__dropIndex('object_references', 'relationship_type');
+                $this->__dropIndex('object_references', 'referenced_uuid');
+                break;
+            case 76:
+                $sqlArray[] = "CREATE TABLE IF NOT EXISTS `system_settings` (
+                      `setting` varchar(255) NOT NULL,
+                      `value` blob NOT NULL,
+                      PRIMARY KEY (`setting`)
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;";
+                $sqlArray[] = "ALTER TABLE `servers` MODIFY COLUMN `authkey` VARBINARY(255) NOT NULL;";
+                $sqlArray[] = "ALTER TABLE `cerebrates` MODIFY COLUMN `authkey` VARBINARY(255) NOT NULL;";
+                break;
+            case 77:
+                $sqlArray[] = "ALTER TABLE `tags` ADD `local_only` tinyint(1) NOT NULL DEFAULT 0 AFTER `is_custom_galaxy`;";
+                $sqlArray[] = "ALTER TABLE `galaxies` ADD `local_only` tinyint(1) NOT NULL DEFAULT 0 AFTER `enabled`;";
+                break;
+            case 78:
+                $sqlArray[] = "ALTER TABLE `jobs` MODIFY COLUMN `process_id` varchar(36) CHARACTER SET utf8 COLLATE utf8_bin DEFAULT NULL;";
+                break;
+            case 79:
+                $sqlArray[] = "ALTER TABLE `users` ADD `sub` varchar(255) NULL DEFAULT NULL;";
+                $sqlArray[] = "ALTER TABLE `users` ADD UNIQUE INDEX `sub` (`sub`);";
+                break;
+            case 80:
+                $sqlArray[] = "CREATE TABLE IF NOT EXISTS `sharing_group_blueprints` (
+                      `id` int(11) NOT NULL AUTO_INCREMENT,
+                      `uuid` varchar(40) COLLATE utf8_bin NOT NULL ,
+                      `name` varchar(191) NOT NULL,
+                      `timestamp` int(11) NOT NULL DEFAULT 0,
+                      `user_id` int(11) NOT NULL,
+                      `org_id` int(11) NOT NULL,
+                      `sharing_group_id` int(11),
+                      `rules` text,
+                      PRIMARY KEY (`id`),
+                      INDEX `uuid` (`uuid`),
+                      INDEX `name` (`name`),
+                      INDEX `org_id` (`org_id`),
+                      INDEX `sharing_group_id` (`sharing_group_id`)
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;";
+                break;
+            case 81:
+                $fields = ['nationality', 'sector', 'type', 'name'];
+                foreach ($fields as $field) {
+                    $sqlArray[] = sprintf("UPDATE organisations SET %s = '' WHERE %s IS NULL;", $field, $field);
+                    $sqlArray[] = sprintf("ALTER table organisations MODIFY %s varchar(255) NOT NULL DEFAULT '';", $field);
+                }
+                break;
+            case 82:
+                $sqlArray[] = sprintf("ALTER table organisations MODIFY description text;");
+                break;
+            case 83:
+                $sqlArray[] = "CREATE TABLE IF NOT EXISTS `sharing_group_blueprints` (
+                      `id` int(11) NOT NULL AUTO_INCREMENT,
+                      `uuid` varchar(40) COLLATE utf8_bin NOT NULL ,
+                      `name` varchar(191) NOT NULL,
+                      `timestamp` int(11) NOT NULL DEFAULT 0,
+                      `user_id` int(11) NOT NULL,
+                      `org_id` int(11) NOT NULL,
+                      `sharing_group_id` int(11),
+                      `rules` text,
+                      PRIMARY KEY (`id`),
+                      INDEX `uuid` (`uuid`),
+                      INDEX `name` (`name`),
+                      INDEX `org_id` (`org_id`),
+                      INDEX `sharing_group_id` (`sharing_group_id`)
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;";
+                break;
+            case 84:
+                $sqlArray[] = sprintf("ALTER table events add `protected` tinyint(1);");
+                $sqlArray[] = "CREATE TABLE IF NOT EXISTS `cryptographic_keys` (
+                      `id` int(11) NOT NULL AUTO_INCREMENT,
+                      `uuid` varchar(40) COLLATE utf8_bin NOT NULL,
+                      `type` varchar(40) COLLATE utf8_bin NOT NULL,
+                      `timestamp` int(11) NOT NULL DEFAULT 0,
+                      `parent_id` int(11) NOT NULL,
+                      `parent_type` varchar(40) COLLATE utf8_bin NOT NULL,
+                      `key_data` text,
+                      `revoked` tinyint(1) NOT NULL DEFAULT 0,
+                      `fingerprint` varchar(255) COLLATE utf8_bin NOT NULL DEFAULT '',
+                      PRIMARY KEY (`id`),
+                      INDEX `uuid` (`uuid`),
+                      INDEX `type` (`type`),
+                      INDEX `parent_id` (`parent_id`)
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;";
+                break;
+            case 85:
+                $this->__addIndex('cryptographic_keys', 'parent_type');
+                $this->__addIndex('cryptographic_keys', 'fingerprint');
+                break;
+            case 86:
+                $this->__addIndex('attributes', 'timestamp');
+                break;
+            case 87:
+                $sqlArray[] = "CREATE TABLE IF NOT EXISTS `no_acl_correlations` (
+                    `id` int(10) UNSIGNED NOT NULL AUTO_INCREMENT,
+                    `attribute_id` int(10) UNSIGNED NOT NULL,
+                    `1_attribute_id` int(10) UNSIGNED NOT NULL,
+                    `event_id` int(10) UNSIGNED NOT NULL,
+                    `1_event_id` int(10) UNSIGNED NOT NULL,
+                    `value_id` int(10) UNSIGNED NOT NULL,
+                    PRIMARY KEY (`id`),
+                    INDEX `event_id` (`event_id`),
+                    INDEX `1_event_id` (`1_event_id`),
+                    INDEX `attribute_id` (`attribute_id`),
+                    INDEX `1_attribute_id` (`1_attribute_id`),
+                    INDEX `value_id` (`value_id`)
+                  ) ENGINE=InnoDB;";
+                $sqlArray[] = "CREATE TABLE IF NOT EXISTS `default_correlations` (
+                    `id` int(10) UNSIGNED NOT NULL AUTO_INCREMENT,
+                    `attribute_id` int(10) UNSIGNED NOT NULL,
+                    `object_id` int(10) UNSIGNED NOT NULL,
+                    `event_id` int(10) UNSIGNED NOT NULL,
+                    `org_id` int(10) UNSIGNED NOT NULL,
+                    `distribution` tinyint(4) NOT NULL,
+                    `object_distribution` tinyint(4) NOT NULL,
+                    `event_distribution` tinyint(4) NOT NULL,
+                    `sharing_group_id` int(10) UNSIGNED NOT NULL DEFAULT 0,
+                    `object_sharing_group_id` int(10) UNSIGNED NOT NULL DEFAULT 0,
+                    `event_sharing_group_id` int(10) UNSIGNED NOT NULL DEFAULT 0,
+                    `1_attribute_id` int(10) UNSIGNED NOT NULL,
+                    `1_object_id` int(10) UNSIGNED NOT NULL,
+                    `1_event_id` int(10) UNSIGNED NOT NULL,
+                    `1_org_id` int(10) UNSIGNED NOT NULL,
+                    `1_distribution` tinyint(4) NOT NULL,
+                    `1_object_distribution` tinyint(4) NOT NULL,
+                    `1_event_distribution` tinyint(4) NOT NULL,
+                    `1_sharing_group_id` int(10) UNSIGNED NOT NULL DEFAULT 0,
+                    `1_object_sharing_group_id` int(10) UNSIGNED NOT NULL DEFAULT 0,
+                    `1_event_sharing_group_id` int(10) UNSIGNED NOT NULL DEFAULT 0,
+                    `value_id` int(10) UNSIGNED NOT NULL,
+                    PRIMARY KEY (`id`),
+                    INDEX `event_id` (`event_id`),
+                    INDEX `attribute_id` (`attribute_id`),
+                    INDEX `object_id` (`object_id`),
+                    INDEX `org_id` (`org_id`),
+                    INDEX `distribution` (`distribution`),
+                    INDEX `object_distribution` (`object_distribution`),
+                    INDEX `event_distribution` (`event_distribution`),
+                    INDEX `sharing_group_id` (`sharing_group_id`),
+                    INDEX `object_sharing_group_id` (`object_sharing_group_id`),
+                    INDEX `event_sharing_group_id` (`event_sharing_group_id`),
+                    INDEX `1_event_id` (`1_event_id`),
+                    INDEX `1_attribute_id` (`1_attribute_id`),
+                    INDEX `1_object_id` (`1_object_id`),
+                    INDEX `1_org_id` (`1_org_id`),
+                    INDEX `1_distribution` (`1_distribution`),
+                    INDEX `1_object_distribution` (`1_object_distribution`),
+                    INDEX `1_event_distribution` (`1_event_distribution`),
+                    INDEX `1_sharing_group_id` (`1_sharing_group_id`),
+                    INDEX `1_object_sharing_group_id` (`1_object_sharing_group_id`),
+                    INDEX `1_event_sharing_group_id` (`1_event_sharing_group_id`),
+                    INDEX `value_id` (`value_id`)
+                  ) ENGINE=InnoDB;";
+                $sqlArray[] = "CREATE TABLE IF NOT EXISTS `correlation_values` (
+                    `id` int(10) UNSIGNED NOT NULL AUTO_INCREMENT,
+                    `value` varchar(191) NOT NULL,
+                    PRIMARY KEY (`id`),
+                    UNIQUE KEY `value` (`value`(191))
+                  ) ENGINE=InnoDB CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;";
+                $sqlArray[] = "CREATE TABLE IF NOT EXISTS `over_correlating_values` (
+                `id` int(10) UNSIGNED NOT NULL AUTO_INCREMENT,
+                `value` text,
+                `occurrence` int(10) UNSIGNED NULL,
+                PRIMARY KEY (`id`),
+                UNIQUE KEY `value` (`value`(191)),
+                INDEX `occurrence` (`occurrence`)
+                ) ENGINE=InnoDB CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;";
+                break;
+            case 88:
+                $sqlArray[] = 'ALTER TABLE `users` ADD `external_auth_required` tinyint(1) NOT NULL DEFAULT 0;';
+                $sqlArray[] = 'ALTER TABLE `users` ADD `external_auth_key` text COLLATE utf8_bin;';
+                break;
+            case 90:
+                $sqlArray[] = "CREATE TABLE IF NOT EXISTS `workflows` (
+                      `id` int(11) NOT NULL AUTO_INCREMENT,
+                      `uuid` varchar(40) COLLATE utf8_bin NOT NULL ,
+                      `name` varchar(191) NOT NULL,
+                      `description` varchar(191) NOT NULL,
+                      `timestamp` int(11) NOT NULL DEFAULT 0,
+                      `enabled` tinyint(1) NOT NULL DEFAULT 0,
+                      `counter` int(11) NOT NULL DEFAULT 0,
+                      `trigger_id` varchar(191) COLLATE utf8_bin NOT NULL,
+                      `debug_enabled` tinyint(1) NOT NULL DEFAULT 0,
+                      `data` text,
+                      PRIMARY KEY (`id`),
+                      INDEX `uuid` (`uuid`),
+                      INDEX `name` (`name`),
+                      INDEX `timestamp` (`timestamp`),
+                      INDEX `trigger_id` (`trigger_id`)
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;";
+                $sqlArray[] = "CREATE TABLE IF NOT EXISTS `workflow_blueprints` (
+                      `id` int(11) NOT NULL AUTO_INCREMENT,
+                      `uuid` varchar(40) COLLATE utf8_bin NOT NULL ,
+                      `name` varchar(191) NOT NULL,
+                      `description` varchar(191) NOT NULL,
+                      `timestamp` int(11) NOT NULL DEFAULT 0,
+                      `default` tinyint(1) NOT NULL DEFAULT 0,
+                      `data` text,
+                      PRIMARY KEY (`id`),
+                      INDEX `uuid` (`uuid`),
+                      INDEX `name` (`name`),
+                      INDEX `timestamp` (`timestamp`)
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;";
+                    break;
+            case 92:
+                $sqlArray[] = "ALTER TABLE users ADD `last_api_access` INT(11) DEFAULT 0;";
+                break;
+            case 93:
+                $this->__dropIndex('default_correlations', 'distribution');
+                $this->__dropIndex('default_correlations', 'object_distribution');
+                $this->__dropIndex('default_correlations', 'event_distribution');
+                $this->__dropIndex('default_correlations', 'sharing_group_id');
+                $this->__dropIndex('default_correlations', 'object_sharing_group_id');
+                $this->__dropIndex('default_correlations', 'event_sharing_group_id');
+                $this->__dropIndex('default_correlations', 'org_id');
+                $this->__dropIndex('default_correlations', '1_distribution');
+                $this->__dropIndex('default_correlations', '1_object_distribution');
+                $this->__dropIndex('default_correlations', '1_event_distribution');
+                $this->__dropIndex('default_correlations', '1_sharing_group_id');
+                $this->__dropIndex('default_correlations', '1_object_sharing_group_id');
+                $this->__dropIndex('default_correlations', '1_event_sharing_group_id');
+                $this->__dropIndex('default_correlations', '1_org_id');
+                break;
+            case 94:
+                $sqlArray[] = "UPDATE `over_correlating_values` SET `value` = SUBSTR(`value`, 1, 191);"; // truncate then migrate
+                $sqlArray[] = "ALTER TABLE `over_correlating_values` MODIFY `value` varchar(191) NOT NULL;";
+                break;
+            case 95:
+                $sqlArray[] = "ALTER TABLE `servers` ADD `remove_missing_tags` tinyint(1) NOT NULL DEFAULT 0 AFTER `skip_proxy`;";
+                break;
+            case 97:
+                $sqlArray[] = "ALTER TABLE `users`
+                    ADD COLUMN `notification_daily`     tinyint(1) NOT NULL DEFAULT 0,
+                    ADD COLUMN `notification_weekly`    tinyint(1) NOT NULL DEFAULT 0,
+                    ADD COLUMN `notification_monthly`   tinyint(1) NOT NULL DEFAULT 0
+                ;";
+                break;
+            case 98:
+                $this->__addIndex('object_template_elements', 'object_template_id');
+                break;
+            case 99: 
+                $sqlArray[] = "ALTER TABLE `event_tags` ADD `relationship_type` varchar(191) NULL DEFAULT '';";
+                $sqlArray[] = "ALTER TABLE `attribute_tags` ADD `relationship_type` varchar(191) NULL DEFAULT '';";
+                break;
+            case 100:
+                $sqlArray[] = "CREATE TABLE IF NOT EXISTS `access_logs` (
+                  `id` int(11) NOT NULL AUTO_INCREMENT,
+                  `created` datetime(4) NOT NULL,
+                  `user_id` int(11) NOT NULL,
+                  `org_id` int(11) NOT NULL,
+                  `authkey_id` int(11) DEFAULT NULL,
+                  `ip` varbinary(16) DEFAULT NULL,
+                  `request_method` tinyint NOT NULL,
+                  `user_agent` varchar(255) DEFAULT NULL,
+                  `request_id` varchar(255) DEFAULT NULL,
+                  `controller` varchar(20) NOT NULL,
+                  `action` varchar(20) NOT NULL,
+                  `url` varchar(255) NOT NULL,
+                  `request` blob,
+                  `response_code` smallint NOT NULL,  
+                  `memory_usage` int(11) NOT NULL,
+                  `duration` int(11) NOT NULL,
+                  `query_count` int(11) NOT NULL,
+                  PRIMARY KEY (`id`),
+                  INDEX `user_id` (`user_id`)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;";
+                break;
+            case 101:
+                $sqlArray[] = "CREATE TABLE IF NOT EXISTS `taxii_servers` (
+                    `id` int(11) NOT NULL AUTO_INCREMENT,
+                    `uuid` varchar(40) COLLATE utf8_bin NOT NULL ,
+                    `name` varchar(191) NOT NULL,
+                    `owner` varchar(191) NOT NULL,
+                    `baseurl` varchar(191) NOT NULL,
+                    `api_root` varchar(191) NOT NULL DEFAULT 0,
+                    `description` text,
+                    `filters` text,
+                    `api_key` varchar(255)COLLATE utf8_bin NOT NULL,
+                    PRIMARY KEY (`id`),
+                    INDEX `uuid` (`uuid`),
+                    INDEX `name` (`name`),
+                    INDEX `baseurl` (`baseurl`)
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;";
+                break;
+            case 102:
+                $sqlArray[] = "UPDATE roles SET perm_audit = 1;";
+                break;
+            case 103:
+                $sqlArray[] = "ALTER TABLE `taxonomies` ADD `highlighted` tinyint(1) DEFAULT 0;";
+                break;
+            case 104:
+                $sqlArray[] = "ALTER TABLE `access_logs` ADD `query_log` blob DEFAULT NULL";
+                break;
+            case 105:
+                // set a default role if there is none
+                if (!$this->AdminSetting->getSetting('default_role')) {
+                    $role = ClassRegistry::init('Role')->findByName('User');
+                    if ($role) {
+                        $sqlArray[] = "INSERT INTO `admin_settings` (setting, value) VALUES ('default_role', '".$role['Role']['id']."');";
+                    } else {
+                        // there is no role called User, do nothing
+                    }
+                }
+                break;
+            case 106:
+                $sqlArray[] = "ALTER TABLE `taxii_servers` MODIFY `baseurl` varchar(191) NOT NULL;";
+                break;
+            case 107:
+                $sqlArray[] = "ALTER TABLE `auth_keys` ADD `unique_ips` text COLLATE utf8mb4_unicode_ci";
+                break;
+            case 108:
+                $sqlArray[] = "ALTER TABLE `workflows` MODIFY `data` LONGTEXT;";
+                break;
+            case 109:
+                $sqlArray[] = "UPDATE `over_correlating_values` SET `value` = LOWER(`value`) COLLATE utf8mb4_unicode_ci;";
+                break;
+            case 110:
+                $sqlArray[] = "ALTER TABLE `users` ADD `totp` varchar(255) DEFAULT NULL;";
+                $sqlArray[] = "ALTER TABLE `users` ADD `hotp_counter` int(11) DEFAULT NULL;";
+                break;
+            case 111:
+                $sqlArray[] = "ALTER TABLE `taxii_servers` ADD `collection` varchar(40) CHARACTER SET ascii DEFAULT NULL;";
+                break;
+            case 112:
+                $sqlArray[] = "ALTER TABLE `roles` ADD `perm_view_feed_correlations` tinyint(1) NOT NULL DEFAULT 0;";
+                break;
+            case 113:
+                // we only want to update the existing roles - going forward the default is still 0
+                // Also, we want to execute it as a separate update to ensure that cache clearing is done correctly
+                $this->cleanCacheFiles();
+                $sqlArray[] = "UPDATE roles SET perm_view_feed_correlations = 1;";
+                break;
+            case 114:
+                $indexArray[] = ['object_references', 'uuid'];
+                break;
+            case 115:
+                $sqlArray[] = "ALTER TABLE `users` ADD COLUMN `last_pw_change` BIGINT(20) NULL DEFAULT NULL;";
+                $sqlArray[] = "UPDATE `users` SET last_pw_change=date_modified WHERE last_pw_change IS NULL";
+                break;
+            case 116:
+                $sqlArray[] = "ALTER TABLE `event_reports` modify `content` mediumtext";
+                break;
+            case 117:
+                $sqlArray[] = "CREATE TABLE IF NOT EXISTS `user_login_profiles` (
+                    `id` int(10) unsigned NOT NULL AUTO_INCREMENT,
+                    `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    `user_id` int(11) NOT NULL,
+                    `status` varchar(191) DEFAULT NULL,
+                    `ip` varchar(191) DEFAULT NULL,
+                    `user_agent` varchar(191) DEFAULT NULL,
+                    `accept_lang` varchar(191) DEFAULT NULL,
+                    `geoip` varchar(191) DEFAULT NULL,
+                    `ua_platform` varchar(191) DEFAULT NULL,
+                    `ua_browser` varchar(191) DEFAULT NULL,
+                    `ua_pattern` varchar(191) DEFAULT NULL,
+                    `hash` varchar(32) COLLATE utf8mb4_unicode_ci NOT NULL,
+                    PRIMARY KEY (`id`),
+                    UNIQUE KEY `hash` (`hash`),
+                    KEY `ip` (`ip`),
+                    KEY `status` (`status`),
+                    KEY `geoip` (`geoip`),
+                    INDEX `user_id` (`user_id`)
+                  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;";
+                break;
+            case 118:
+                $sqlArray[] = "ALTER TABLE `event_reports` MODIFY `content` mediumtext;";
+                break;
+            case 119:
+                $sqlArray[] = "ALTER TABLE `access_logs` MODIFY `action` varchar(191) NOT NULL";
+                break;
+            case 121:
+                $sqlArray[] = "CREATE TABLE IF NOT EXISTS `notes` (
+                    `id` int(10) unsigned NOT NULL AUTO_INCREMENT,
+                    `uuid` varchar(40) CHARACTER SET ascii COLLATE ascii_general_ci NOT NULL,
+                    `object_uuid` varchar(40) CHARACTER SET ascii COLLATE ascii_general_ci NOT NULL,
+                    `object_type` varchar(80) CHARACTER SET ascii COLLATE ascii_general_ci NOT NULL,
+                    `authors` text,
+                    `org_uuid` varchar(40) CHARACTER SET ascii COLLATE ascii_general_ci NOT NULL,
+                    `orgc_uuid` varchar(40) CHARACTER SET ascii COLLATE ascii_general_ci NOT NULL,
+                    `created` datetime NOT NULL,
+                    `modified` datetime NOT NULL,
+                    `distribution` tinyint(4) NOT NULL,
+                    `sharing_group_id` int(10) unsigned,
+                    `locked` tinyint(1) NOT NULL DEFAULT 0,
+                    `note` mediumtext,
+                    `language` varchar(16) DEFAULT 'en',
+                    PRIMARY KEY (`id`),
+                    UNIQUE KEY `uuid` (`uuid`),
+                    KEY `object_uuid` (`object_uuid`),
+                    KEY `object_type` (`object_type`),
+                    KEY `org_uuid` (`org_uuid`),
+                    KEY `orgc_uuid` (`orgc_uuid`),
+                    KEY `distribution` (`distribution`),
+                    KEY `sharing_group_id` (`sharing_group_id`)
+                  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;";
+
+                $sqlArray[] = "CREATE TABLE IF NOT EXISTS `opinions` (
+                    `id` int(10) unsigned NOT NULL AUTO_INCREMENT,
+                    `uuid` varchar(40) CHARACTER SET ascii COLLATE ascii_general_ci NOT NULL,
+                    `object_uuid` varchar(40) CHARACTER SET ascii COLLATE ascii_general_ci NOT NULL,
+                    `object_type` varchar(80) CHARACTER SET ascii COLLATE ascii_general_ci NOT NULL,
+                    `authors` text,
+                    `org_uuid` varchar(40) CHARACTER SET ascii COLLATE ascii_general_ci NOT NULL,
+                    `orgc_uuid` varchar(40) CHARACTER SET ascii COLLATE ascii_general_ci NOT NULL,
+                    `created` datetime NOT NULL,
+                    `modified` datetime NOT NULL,
+                    `distribution` tinyint(4) NOT NULL,
+                    `sharing_group_id` int(10) unsigned,
+                    `locked` tinyint(1) NOT NULL DEFAULT 0,
+                    `opinion` int(10) unsigned,
+                    `comment` text,
+                    PRIMARY KEY (`id`),
+                    UNIQUE KEY `uuid` (`uuid`),
+                    KEY `object_uuid` (`object_uuid`),
+                    KEY `object_type` (`object_type`),
+                    KEY `org_uuid` (`org_uuid`),
+                    KEY `orgc_uuid` (`orgc_uuid`),
+                    KEY `distribution` (`distribution`),
+                    KEY `sharing_group_id` (`sharing_group_id`),
+                    KEY `opinion` (`opinion`)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;";
+
+                $sqlArray[] = "CREATE TABLE IF NOT EXISTS `relationships` (
+                    `id` int(10) unsigned NOT NULL AUTO_INCREMENT,
+                    `uuid` varchar(40) CHARACTER SET ascii NOT NULL,
+                    `object_uuid` varchar(40) CHARACTER SET ascii COLLATE ascii_general_ci NOT NULL,
+                    `object_type` varchar(80) CHARACTER SET ascii COLLATE ascii_general_ci NOT NULL,
+                    `authors` text,
+                    `org_uuid` varchar(40) CHARACTER SET ascii COLLATE ascii_general_ci NOT NULL,
+                    `orgc_uuid` varchar(40) CHARACTER SET ascii COLLATE ascii_general_ci NOT NULL,
+                    `created` datetime NOT NULL,
+                    `modified` datetime NOT NULL,
+                    `distribution` tinyint(4) NOT NULL,
+                    `sharing_group_id` int(10) unsigned,
+                    `locked` tinyint(1) NOT NULL DEFAULT 0,
+                    `relationship_type` varchar(255) CHARACTER SET utf8 COLLATE utf8_unicode_ci,
+                    `related_object_uuid` varchar(40) CHARACTER SET ascii COLLATE ascii_general_ci NOT NULL,
+                    `related_object_type` varchar(80) CHARACTER SET ascii COLLATE ascii_general_ci NOT NULL,
+                    PRIMARY KEY (`id`),
+                    UNIQUE KEY `uuid` (`uuid`),
+                    KEY `object_uuid` (`object_uuid`),
+                    KEY `object_type` (`object_type`),
+                    KEY `org_uuid` (`org_uuid`),
+                    KEY `orgc_uuid` (`orgc_uuid`),
+                    KEY `distribution` (`distribution`),
+                    KEY `sharing_group_id` (`sharing_group_id`),
+                    KEY `relationship_type` (`relationship_type`),
+                    KEY `related_object_uuid` (`related_object_uuid`),
+                    KEY `related_object_type` (`related_object_type`)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;";
+
+                $sqlArray[] = "CREATE TABLE IF NOT EXISTS `analyst_data_blocklists` (
+                    `id` int(11) NOT NULL AUTO_INCREMENT,
+                    `analyst_data_uuid` varchar(40) COLLATE utf8_bin NOT NULL,
+                    `created` datetime NOT NULL,
+                    `analyst_data_info` TEXT CHARACTER SET utf8 COLLATE utf8_unicode_ci NOT NULL,
+                    `comment` TEXT CHARACTER SET utf8 COLLATE utf8_unicode_ci,
+                    `analyst_data_orgc` VARCHAR(255) CHARACTER SET utf8 COLLATE utf8_bin NOT NULL,
+                    PRIMARY KEY (`id`),
+                    KEY `analyst_data_uuid` (`analyst_data_uuid`),
+                    KEY `analyst_data_orgc` (`analyst_data_orgc`)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8 COLLATE=utf8_bin;";
+
+                $sqlArray[] = "ALTER TABLE `roles` ADD `perm_analyst_data` tinyint(1) NOT NULL DEFAULT 0;";
+                $sqlArray[] = "UPDATE `roles` SET `perm_analyst_data`=1 WHERE `perm_add` = 1;";
+
+                $sqlArray[] = "ALTER TABLE `servers` ADD `push_analyst_data` tinyint(1) NOT NULL DEFAULT 0 AFTER `push_galaxy_clusters`;";
+                $sqlArray[] = "ALTER TABLE `servers` ADD `pull_analyst_data` tinyint(1) NOT NULL DEFAULT 0 AFTER `push_analyst_data`;";
+                break;
+            case 122:
+                $sqlArray[] = "CREATE TABLE IF NOT EXISTS `collections` (
+                    `id` int(10) unsigned NOT NULL AUTO_INCREMENT,
+                    `uuid` varchar(40) CHARACTER SET ascii COLLATE ascii_general_ci NOT NULL,
+                    `org_id` int(10) unsigned NOT NULL,
+                    `orgc_id` int(10) unsigned NOT NULL,
+                    `user_id` int(10) unsigned NOT NULL,
+                    `created` datetime NOT NULL,
+                    `modified` datetime NOT NULL,
+                    `distribution` tinyint(4) NOT NULL,
+                    `sharing_group_id` int(10) unsigned,
+                    `name` varchar(191) NOT NULL,
+                    `type` varchar(80) CHARACTER SET ascii COLLATE ascii_general_ci NOT NULL,
+                    `description` mediumtext,
+                    PRIMARY KEY (`id`),
+                    UNIQUE KEY `uuid` (`uuid`),
+                    KEY `name` (`name`),
+                    KEY `type` (`type`),
+                    KEY `org_id` (`org_id`),
+                    KEY `orgc_id` (`orgc_id`),
+                    KEY `user_id` (`user_id`),
+                    KEY `distribution` (`distribution`),
+                    KEY `sharing_group_id` (`sharing_group_id`)
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;";
+
+                $sqlArray[] = "CREATE TABLE IF NOT EXISTS `collection_elements` (
+                    `id` int(10) unsigned NOT NULL AUTO_INCREMENT,
+                    `uuid` varchar(40) CHARACTER SET ascii COLLATE ascii_general_ci NOT NULL,
+                    `element_uuid` varchar(40) CHARACTER SET ascii COLLATE ascii_general_ci NOT NULL,
+                    `element_type` varchar(80) CHARACTER SET ascii COLLATE ascii_general_ci NOT NULL,
+                    `collection_id` int(10) unsigned NOT NULL,
+                    `description` text,
+                    PRIMARY KEY (`id`),
+                    UNIQUE KEY `uuid` (`uuid`),
+                    KEY `element_uuid` (`element_uuid`),
+                    KEY `element_type` (`element_type`),
+                    KEY `collection_id` (`collection_id`),
+                    UNIQUE KEY `unique_element` (`element_uuid`, `collection_id`)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;";
+                break;
+            case 123:
+                $sqlArray[] = 'ALTER TABLE `notes` MODIFY `created` datetime NOT NULL';
+                $sqlArray[] = 'ALTER TABLE `opinions` MODIFY `created` datetime NOT NULL;';
+                $sqlArray[] = 'ALTER TABLE `relationships` MODIFY `created` datetime NOT NULL;';
+                $sqlArray[] = 'ALTER TABLE `notes` MODIFY `modified` datetime NOT NULL;';
+                $sqlArray[] = 'ALTER TABLE `opinions` MODIFY `modified` datetime NOT NULL;';
+                $sqlArray[] = 'ALTER TABLE `relationships` MODIFY `modified` datetime NOT NULL;';
+                break;
+            case 124:
+                $sqlArray[] = 'CREATE TABLE IF NOT EXISTS `sighting_blocklists` (
+                    `id` int(11) NOT NULL AUTO_INCREMENT,
+                    `org_uuid` varchar(40) COLLATE utf8_bin NOT NULL,
+                    `created` datetime NOT NULL,
+                    `org_name` varchar(255) COLLATE utf8_bin NOT NULL,
+                    `comment` TEXT CHARACTER SET utf8 COLLATE utf8_unicode_ci,
+                    PRIMARY KEY (`id`),
+                    INDEX `org_uuid` (`org_uuid`),
+                    INDEX `org_name` (`org_name`)
+                  ) ENGINE=InnoDB DEFAULT CHARSET=utf8 COLLATE=utf8_bin;';
+                break;
+            case 125:
+                $sqlArray[] = "ALTER TABLE `feeds` ADD COLUMN `tag_collection_id` INT(11) NOT NULL DEFAULT 0;";
+                break;
+            case 126:
+                $sqlArray[] = "ALTER TABLE `roles` ADD `perm_skip_otp` tinyint(1) NOT NULL DEFAULT 0;";
+                break;
+            case 127:
+                $sqlArray[] = 'CREATE TABLE IF NOT EXISTS `bookmarks` (
+                    `id` int(11) NOT NULL AUTO_INCREMENT,
+                    `user_id` int(10) unsigned NOT NULL,
+                    `org_id` int(10) unsigned NOT NULL,
+                    `name` varchar(191) NOT NULL,
+                    `url` varchar(255) NOT NULL,
+                    `exposed_to_org` tinyint(1) NOT NULL DEFAULT 0,
+                    PRIMARY KEY (`id`),
+                    INDEX `user_id` (`user_id`),
+                    INDEX `org_id` (`org_id`),
+                    INDEX `name` (`name`)
+                  ) ENGINE=InnoDB DEFAULT CHARSET=utf8 COLLATE=utf8_bin;';
+                break;
+            case 128:
+                $sqlArray[] = 'CREATE TABLE IF NOT EXISTS `correlation_rules` (
+                    `id` int(11) NOT NULL AUTO_INCREMENT,
+                    `uuid` varchar(40) CHARACTER SET ascii COLLATE ascii_general_ci NOT NULL,
+                    `name` varchar(191) NOT NULL,
+                    `comment` text,
+                    `selector_type` varchar(40) NOT NULL,
+                    `selector_list` text,
+                    `created` int(11) NOT NULL DEFAULT (UNIX_TIMESTAMP()),
+                    `timestamp` int(11) NOT NULL DEFAULT 0,
+                    PRIMARY KEY (`id`),
+                    INDEX `uuid` (`uuid`),
+                    INDEX `name` (`name`),
+                    INDEX `selector_type` (`selector_type`)
+                  ) ENGINE=InnoDB DEFAULT CHARSET=utf8 COLLATE=utf8_bin;';
+                  break;
+            case 129:
+                $sqlArray[] = "ALTER TABLE `bookmarks` ADD `comment` TEXT CHARACTER SET utf8 COLLATE utf8_unicode_ci;";
+                break;
+            case 130:
+                // change bookmarks' table's comment field to utf8_mb4
+                $sqlArray[] = "ALTER TABLE `bookmarks` MODIFY `comment` TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;";
+                break;
+            case 131:
+                $sqlArray[] = "ALTER TABLE `galaxies` ADD `default` tinyint(1) NOT NULL DEFAULT 0;";
+                $sqlArray[] = "ALTER TABLE `galaxies` ADD `org_id` int(10) unsigned NOT NULL";
+                $sqlArray[] = "ALTER TABLE `galaxies` ADD `orgc_id` int(10) unsigned NOT NULL";
+                $sqlArray[] = "ALTER TABLE `galaxies` ADD `created` datetime NOT NULL";
+                $sqlArray[] = "ALTER TABLE `galaxies` ADD `modified` datetime NOT NULL";
+                $sqlArray[] = "ALTER TABLE `galaxies` ADD `distribution` tinyint(4) NOT NULL";
+                $sqlArray[] = 'UPDATE `galaxies` SET `distribution` = 3;';
+                $sqlArray[] = "UPDATE galaxies g
+                    SET g.default = (
+                        CASE
+                            -- Set to 0 if all related galaxy_clusters have default set to 0
+                            WHEN (
+                                SELECT MAX(gc.default)
+                                FROM galaxy_clusters gc
+                                WHERE gc.galaxy_id = g.id
+                            ) = 0 THEN 0
+                            -- Otherwise, set to 1 if any related cluster has default <> 0
+                            ELSE 1
+                        END
+                    );
+                ";
+
+                $this->__addIndex('galaxies', 'default');
+                $this->__addIndex('galaxies', 'org_id');
+                $this->__addIndex('galaxies', 'orgc_id');
+                $this->__addIndex('galaxies', 'user_id');
+                $this->__addIndex('galaxies', 'created');
+                $this->__addIndex('galaxies', 'modified');
+                $this->__addIndex('galaxies', 'distribution');
+                break;
+            case 132:
+                $sqlArray[] = "CREATE TABLE IF NOT EXISTS `event_report_tags` (
+                    `id` int(11) NOT NULL AUTO_INCREMENT,
+                    `event_report_id` int(11) NOT NULL,
+                    `tag_id` int(11) NOT NULL,
+                    `local` tinyint(1) NOT NULL DEFAULT 0,
+                    `relationship_type` varchar(191) NULL DEFAULT '',
+                    PRIMARY KEY (`id`)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8;";
+                $indexArray[] = array('event_report_tags', 'event_report_id');
+                $indexArray[] = array('event_report_tags', 'tag_id');
+                break;
+            case 133:
+                $sqlArray[] = "CREATE TABLE IF NOT EXISTS `event_report_template_variables` (
+                    `id` int(11) NOT NULL AUTO_INCREMENT,
+                    `name` varchar(191) NOT NULL,
+                    `value` text,
+                    PRIMARY KEY (`id`)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8;";
+                $indexArray[] = array('event_report_template_variables', 'name');
+                break;
+            case 134:
+                $sqlArray[] = "ALTER TABLE `roles` ADD `perm_server_sign` tinyint(1) NOT NULL DEFAULT 0;";
+                $sqlArray[] = "UPDATE `roles` SET `perm_server_sign`=1 WHERE `perm_site_admin` = 1;";
+                break;
+            case 135:
+                $sqlArray[] = "ALTER TABLE `taxii_servers` ADD `skip_proxy` tinyint(1) NOT NULL DEFAULT 0;";
+                break;
+            case 136:
+                $sqlArray[] = "ALTER TABLE `roles` ADD `perm_sync_internal` tinyint(1) NOT NULL DEFAULT 0;";
+                $sqlArray[] = "ALTER TABLE `roles` ADD `perm_sync_authoritative` tinyint(1) NOT NULL DEFAULT 0;";
+                break;
+            case 137:
+                $sqlArray[] = "ALTER TABLE `object_relationships` ADD `highlighted` tinyint(1) DEFAULT 0;";
+                break;
+            case 138:
+                $sqlArray[] = "ALTER TABLE `events` MODIFY info text CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL;";
+                break;
+            case 139:
+                $sqlArray[] = "ALTER TABLE `roles` ADD `restsearch_limit_result` int(11) NULL DEFAULT NULL;";
+                break;
+            case 140:
+                $sqlArray[] = "ALTER TABLE `taxii_servers` MODIFY `api_key` TEXT NOT NULL";
+                break;
+            case 141:
+                $sqlArray[] = "CREATE TABLE `scheduled_tasks` (`id` INT(11) NOT NULL AUTO_INCREMENT, `type` VARCHAR(100) NOT NULL, `timer` INT(11) NOT NULL, `last_job_id` INT(11) DEFAULT NULL, `description` VARCHAR(255) NOT NULL, `next_execution_time` INT(11) NOT NULL, `message` VARCHAR(255) NOT NULL, `user_id` INT(11) NOT NULL, `action` VARCHAR(40) NOT NULL, `params` VARCHAR(255) DEFAULT NULL, `enabled` TINYINT(1) DEFAULT 0, `last_run_at` INT(11) DEFAULT NULL, PRIMARY KEY (`id`)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;";
+                $this->cleanCacheFiles();
                 break;
             case 'fixNonEmptySharingGroupID':
                 $sqlArray[] = 'UPDATE `events` SET `sharing_group_id` = 0 WHERE `distribution` != 4;';
@@ -1646,6 +2639,15 @@ class AppModel extends Model
                 $indexArray[] = array('shadow_attributes', 'first_seen');
                 $indexArray[] = array('shadow_attributes', 'last_seen');
                 break;
+            case 'createUUIDsConstraints':
+                $tables_to_check = ['events', 'attributes', 'objects', 'sightings', 'dashboards', 'inbox', 'organisations', 'tag_collections'];
+                foreach ($tables_to_check as $table) {
+                    if (!$this->checkIndexExists($table, 'uuid', true)) {
+                        $this->__dropIndex($table, 'uuid');
+                        $this->__addIndex($table, 'uuid', null, true);
+                    }
+                }
+                break;
             default:
                 return false;
         }
@@ -1659,7 +2661,7 @@ class AppModel extends Model
         $total_update_count = $sql_update_count + $index_update_count;
         $this->__setUpdateProgress(0, $total_update_count, $command);
         $str_index_array = array();
-        foreach($indexArray as $toIndex) {
+        foreach ($indexArray as $toIndex) {
             $str_index_array[] = __('Indexing %s -> %s', $toIndex[0], $toIndex[1]);
         }
         $this->__setUpdateCmdMessages(array_merge($sqlArray, $str_index_array));
@@ -1667,8 +2669,8 @@ class AppModel extends Model
         $errorCount = 0;
 
         // execute test before update. Exit if it fails
-        if (isset($this->advanced_updates_description[$command]['preUpdate'])) {
-            $function_name = $this->advanced_updates_description[$command]['preUpdate'];
+        if (isset(self::ADVANCED_UPDATES_DESCRIPTION[$command]['preUpdate'])) {
+            $function_name = self::ADVANCED_UPDATES_DESCRIPTION[$command]['preUpdate'];
             try {
                 $this->{$function_name}();
             } catch (Exception $e) {
@@ -1689,7 +2691,7 @@ class AppModel extends Model
                     $this->__setUpdateProgress($i, false);
                     $this->query($sql);
                     $this->Log->create();
-                    $this->Log->save(array(
+                    $this->Log->saveOrFailSilently(array(
                         'org' => 'SYSTEM',
                         'model' => 'Server',
                         'model_id' => 0,
@@ -1713,8 +2715,8 @@ class AppModel extends Model
                         'title' => __('Issues executing the SQL query for %s', $command),
                         'change' => __('The executed SQL query was: ') . $sql . PHP_EOL . __(' The returned error is: ') . $errorMessage
                     );
-                    $this->__setUpdateResMessages($i, sprintf(__('Issues executing the SQL query for `%s`. The returned error is: ' . PHP_EOL . '%s'), $command, $errorMessage));
-                    if (!$this->isAcceptedDatabaseError($errorMessage, $dataSource)) {
+                    $this->__setUpdateResMessages($i, __('Issues executing the SQL query for `%s`. The returned error is: ' . PHP_EOL . '%s', $command, $errorMessage));
+                    if (!$this->isAcceptedDatabaseError($errorMessage)) {
                         $this->__setUpdateError($i);
                         $errorCount++;
                         if ($exitOnError) {
@@ -1724,7 +2726,7 @@ class AppModel extends Model
                     } else {
                         $logMessage['change'] = $logMessage['change'] . PHP_EOL . __('However, as this error is allowed, the update went through.');
                     }
-                    $this->Log->save($logMessage);
+                    $this->Log->saveOrFailSilently($logMessage);
                 }
             }
         }
@@ -1766,15 +2768,15 @@ class AppModel extends Model
         }
         if ($flagStop && $errorCount > 0) {
             $this->Log->create();
-            $this->Log->save(array(
-                    'org' => 'SYSTEM',
-                    'model' => 'Server',
-                    'model_id' => 0,
-                    'email' => 'SYSTEM',
-                    'action' => 'update_database',
-                    'user_id' => 0,
-                    'title' => __('Issues executing the SQL query for %s', $command),
-                    'change' => __('Database updates stopped as some errors occurred and the stop flag is enabled.')
+            $this->Log->saveOrFailSilently(array(
+                'org' => 'SYSTEM',
+                'model' => 'Server',
+                'model_id' => 0,
+                'email' => 'SYSTEM',
+                'action' => 'update_database',
+                'user_id' => 0,
+                'title' => __('Issues executing the SQL query for %s', $command),
+                'change' => __('Database updates stopped as some errors occurred and the stop flag is enabled.')
             ));
             return false;
         }
@@ -1804,10 +2806,15 @@ class AppModel extends Model
         $this->Server->serverSettingsSaveValue('MISP.live', $isLive);
     }
 
-    // check whether the adminSetting should be updated after the update
-    private function __postUpdate($command) {
-        if (isset($this->advanced_updates_description[$command]['record'])) {
-            if($this->advanced_updates_description[$command]['record']) {
+    /**
+     * Check whether the adminSetting should be updated after the update.
+     * @param string $command
+     * @return void
+     */
+    private function __postUpdate($command)
+    {
+        if (isset(self::ADVANCED_UPDATES_DESCRIPTION[$command]['record'])) {
+            if (self::ADVANCED_UPDATES_DESCRIPTION[$command]['record']) {
                 $this->AdminSetting->changeSetting($command, 1);
             }
         }
@@ -1815,21 +2822,19 @@ class AppModel extends Model
 
     private function __dropIndex($table, $field)
     {
-        $dataSourceConfig = ConnectionManager::getDataSource('default')->config;
-        $dataSource = $dataSourceConfig['datasource'];
         $this->Log = ClassRegistry::init('Log');
         $indexCheckResult = array();
-        if ($dataSource == 'Database/Mysql' || $dataSource == 'Database/MysqlObserver') {
+        if ($this->isMysql()) {
             $indexCheck = "SELECT INDEX_NAME FROM INFORMATION_SCHEMA.STATISTICS WHERE table_schema=DATABASE() AND table_name='" . $table . "' AND index_name LIKE '" . $field . "%';";
             $indexCheckResult = $this->query($indexCheck);
-        } elseif ($dataSource == 'Database/Postgres') {
+        } else {
             $pgIndexName = 'idx_' . $table . '_' . $field;
             $indexCheckResult[] = array('STATISTICS' => array('INDEX_NAME' => $pgIndexName));
         }
         foreach ($indexCheckResult as $icr) {
-            if ($dataSource == 'Database/Mysql' || $dataSource == 'Database/MysqlObserver') {
+            if ($this->isMysql()) {
                 $dropIndex = 'ALTER TABLE ' . $table . ' DROP INDEX ' . $icr['STATISTICS']['INDEX_NAME'] . ';';
-            } elseif ($dataSource == 'Database/Postgres') {
+            } else {
                 $dropIndex = 'DROP INDEX IF EXISTS ' . $icr['STATISTICS']['INDEX_NAME'] . ';';
             }
             $result = true;
@@ -1839,26 +2844,24 @@ class AppModel extends Model
                 $result = false;
             }
             $this->Log->create();
-            $this->Log->save(array(
-                    'org' => 'SYSTEM',
-                    'model' => 'Server',
-                    'model_id' => 0,
-                    'email' => 'SYSTEM',
-                    'action' => 'update_database',
-                    'user_id' => 0,
-                    'title' => ($result ? 'Removed index ' : 'Failed to remove index ') . $icr['STATISTICS']['INDEX_NAME'] . ' from ' . $table,
-                    'change' => ($result ? 'Removed index ' : 'Failed to remove index ') . $icr['STATISTICS']['INDEX_NAME'] . ' from ' . $table,
+            $this->Log->saveOrFailSilently(array(
+                'org' => 'SYSTEM',
+                'model' => 'Server',
+                'model_id' => 0,
+                'email' => 'SYSTEM',
+                'action' => 'update_database',
+                'user_id' => 0,
+                'title' => ($result ? 'Removed index ' : 'Failed to remove index ') . $icr['STATISTICS']['INDEX_NAME'] . ' from ' . $table,
+                'change' => ($result ? 'Removed index ' : 'Failed to remove index ') . $icr['STATISTICS']['INDEX_NAME'] . ' from ' . $table,
             ));
         }
     }
 
     private function __addIndex($table, $field, $length = null, $unique = false)
     {
-        $dataSourceConfig = ConnectionManager::getDataSource('default')->config;
-        $dataSource = $dataSourceConfig['datasource'];
         $this->Log = ClassRegistry::init('Log');
         $index = $unique ? 'UNIQUE INDEX' : 'INDEX';
-        if ($dataSource == 'Database/Postgres') {
+        if (!$this->isMysql()) {
             $addIndex = "CREATE $index idx_" . $table . "_" . $field . " ON " . $table . " (" . $field . ");";
         } else {
             if (!$length) {
@@ -1878,21 +2881,44 @@ class AppModel extends Model
             $result = false;
         }
         $this->Log->create();
-        $this->Log->save(array(
-                'org' => 'SYSTEM',
-                'model' => 'Server',
-                'model_id' => 0,
-                'email' => 'SYSTEM',
-                'action' => 'update_database',
-                'user_id' => 0,
-                'title' => ($result ? 'Added index ' : 'Failed to add index ') . $field . ' to ' . $table . ($duplicate ? ' (index already set)' : $errorMessage),
-                'change' => ($result ? 'Added index ' : 'Failed to add index ') . $field . ' to ' . $table . ($duplicate ? ' (index already set)' : $errorMessage),
+        $this->Log->saveOrFailSilently(array(
+            'org' => 'SYSTEM',
+            'model' => 'Server',
+            'model_id' => 0,
+            'email' => 'SYSTEM',
+            'action' => 'update_database',
+            'user_id' => 0,
+            'title' => ($result ? 'Added index ' : 'Failed to add index ') . $field . ' to ' . $table . ($duplicate ? ' (index already set)' : $errorMessage),
+            'change' => ($result ? 'Added index ' : 'Failed to add index ') . $field . ' to ' . $table . ($duplicate ? ' (index already set)' : $errorMessage),
         ));
         $additionResult = array('success' => $result || $duplicate);
         if (!$result) {
             $additionResult['errorMessage'] = $errorMessage;
         }
         return $additionResult;
+    }
+
+    public function checkIndexExists($table, $column_name, $is_unique = false): bool
+    {
+        $query = sprintf(
+            'SHOW INDEX FROM %s WHERE Column_name = \'%s\' and Non_unique = %s;',
+            $table,
+            $column_name,
+            !empty($is_unique) ? '0' : '1'
+        );
+        $existing_index = $this->query($query);
+        return !empty($existing_index);
+    }
+
+    public function checkNamedIndexExists($table, $index_name): bool
+    {
+        $query = sprintf(
+            'SHOW INDEX FROM %s WHERE Key_name = \'%s\';',
+            $table,
+            $index_name
+        );
+        $existing_index = $this->query($query);
+        return !empty($existing_index);
     }
 
     public function cleanCacheFiles()
@@ -1912,15 +2938,6 @@ class AppModel extends Model
         return true;
     }
 
-    public function getPythonVersion()
-    {
-        if (!empty(Configure::read('MISP.python_bin'))) {
-            return Configure::read('MISP.python_bin');
-        } else {
-            return 'python3';
-        }
-    }
-
     public function validateAuthkey($value)
     {
         if (empty($value['authkey'])) {
@@ -1933,64 +2950,47 @@ class AppModel extends Model
     }
 
     // alternative to the build in notempty/notblank validation functions, compatible with cakephp <= 2.6 and cakephp and cakephp >= 2.7
-    public function valueNotEmpty($value)
+    public function valueNotEmpty(array $value)
     {
-        $field = array_keys($value);
-        $field = $field[0];
-        $value[$field] = trim($value[$field]);
-        if (!empty($value[$field])) {
+        $field = array_key_first($value);
+        $value = trim($value[$field]);
+        if (!empty($value)) {
             return true;
         }
         return ucfirst($field) . ' cannot be empty.';
     }
 
-    public function valueIsJson($value)
+    public function valueIsJson(array $value)
     {
-        $field = array_keys($value);
-        $field = $field[0];
-        $json_decoded = json_decode($value[$field]);
-        if ($json_decoded === null) {
+        $value = current($value);
+        if (!JsonTool::isValid($value)) {
             return __('Invalid JSON.');
         }
         return true;
     }
 
-    public function valueIsJsonOrNull($value)
+    public function valueIsID(array $value)
     {
-        $field = array_keys($value);
-        $field = $field[0];
-        if (!is_null($value[$field])) {
-            $json_decoded = json_decode($value[$field]);
-            if ($json_decoded === null) {
-                return __('Invalid JSON.');
-            }
-        }
-        return true;
-    }
-
-    public function valueIsID($value)
-    {
-        $field = array_keys($value);
-        $field = $field[0];
+        $field = array_key_first($value);
         if (!is_numeric($value[$field]) || $value[$field] < 0) {
             return 'Invalid ' . ucfirst($field) . ' ID';
         }
         return true;
     }
 
-    public function stringNotEmpty($value)
+    public function stringNotEmpty(array $value)
     {
-        $field = array_keys($value);
-        $field = $field[0];
-        $value[$field] = trim($value[$field]);
-        if (!isset($value[$field]) || ($value[$field] == false && $value[$field] !== "0")) {
+        $field = array_key_first($value);
+        $value = trim($value[$field]);
+        if (!isset($value) || ($value == false && $value !== "0")) {
             return ucfirst($field) . ' cannot be empty.';
         }
         return true;
     }
 
     // Try to create a table with a BIGINT(20)
-    public function seenOnAttributeAndObjectPreUpdate() {
+    public function seenOnAttributeAndObjectPreUpdate()
+    {
         $sqlArray[] = "CREATE TABLE IF NOT EXISTS testtable (
             `testfield` BIGINT(6) NULL DEFAULT NULL
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8;";
@@ -2008,16 +3008,11 @@ class AppModel extends Model
         }
     }
 
-    public function failingPreUpdate() {
-        throw new Exception('Yolo fail');
-    }
-
     public function runUpdates($verbose = false, $useWorker = true, $processId = false)
     {
         $this->AdminSetting = ClassRegistry::init('AdminSetting');
         $this->Job = ClassRegistry::init('Job');
-        $this->Log = ClassRegistry::init('Log');
-        $this->Server = ClassRegistry::init('Server');
+
         $db = ConnectionManager::getDataSource('default');
         $tables = $db->listSources();
         $requiresLogout = false;
@@ -2027,9 +3022,12 @@ class AppModel extends Model
             $requiresLogout = true;
         } else {
             $this->__runCleanDB();
-            $db_version = $this->AdminSetting->find('all', array('conditions' => array('setting' => 'db_version')));
+            $db_version = $this->AdminSetting->find('all', [
+                'conditions' => array('setting' => 'db_version'),
+                'fields' => ['id', 'value'],
+            ]);
             if (count($db_version) > 1) {
-                // we rgan into a bug where we have more than one db_version entry. This bug happened in some rare circumstances around 2.4.50-2.4.57
+                // we ran into a bug where we have more than one db_version entry. This bug happened in some rare circumstances around 2.4.50-2.4.57
                 foreach ($db_version as $k => $v) {
                     if ($k > 0) {
                         $this->AdminSetting->delete($v['AdminSetting']['id']);
@@ -2046,6 +3044,8 @@ class AppModel extends Model
                 $job = null;
             }
             if (!empty($updates)) {
+                $this->Log = ClassRegistry::init('Log');
+                $this->Server = ClassRegistry::init('Server');
                 // Exit if updates are locked.
                 // This is not as reliable as a real lock implementation
                 // However, as all updates are re-playable, there is no harm if they
@@ -2053,15 +3053,15 @@ class AppModel extends Model
                 // is only to limit the load.
                 if ($this->isUpdateLocked()) { // prevent creation of useless workers
                     $this->Log->create();
-                    $this->Log->save(array(
-                            'org' => 'SYSTEM',
-                            'model' => 'Server',
-                            'model_id' => 0,
-                            'email' => 'SYSTEM',
-                            'action' => 'update_db_worker',
-                            'user_id' => 0,
-                            'title' => __('Issues executing run_updates'),
-                            'change' => __('Database updates are locked. Worker not spawned')
+                    $this->Log->saveOrFailSilently(array(
+                        'org' => 'SYSTEM',
+                        'model' => 'Server',
+                        'model_id' => 0,
+                        'email' => 'SYSTEM',
+                        'action' => 'update_db_worker',
+                        'user_id' => 0,
+                        'title' => __('Issues executing run_updates'),
+                        'change' => __('Database updates are locked. Make sure that you have an update worker running. If you do, it might be related to an update\'s execution repeatedly failing or still being in progress.')
                     ));
                     if (!empty($job)) { // if multiple prio worker is enabled, want to mark them as done
                         $job['Job']['progress'] = 100;
@@ -2080,26 +3080,28 @@ class AppModel extends Model
                     } else { // update worker not running, doing the update inline
                         return $this->runUpdates($verbose, false);
                     }
-                    $this->Job->create();
-                    $data = array(
-                        'worker' => $workerType,
-                        'job_type' => 'run_updates',
-                        'job_input' => 'command: ' . implode(',', $updates),
-                        'status' => 0,
-                        'retries' => 0,
-                        'org_id' => 0,
-                        'org' => '',
-                        'message' => 'Updating.',
+
+                    /** @var Job $job */
+                    $job = ClassRegistry::init('Job');
+                    $jobId = $job->createJob(
+                            'SYSTEM',
+                            Job::WORKER_UPDATE,
+                            'run_updates',
+                            'command: ' . implode(',', $updates),
+                            'Updating.'
+                        );
+
+                    $this->getBackgroundJobsTool()->enqueue(
+                        BackgroundJobsTool::UPDATE_QUEUE,
+                        BackgroundJobsTool::CMD_ADMIN,
+                        [
+                            'runUpdates',
+                            $jobId
+                        ],
+                        true,
+                        $jobId
                     );
-                    $this->Job->save($data);
-                    $jobId = $this->Job->id;
-                    $processId = CakeResque::enqueue(
-                            'prio',
-                            'AdminShell',
-                            array('runUpdates', $jobId),
-                            true
-                    );
-                    $this->Job->saveField('process_id', $processId);
+
                     return true;
                 }
 
@@ -2108,15 +3110,15 @@ class AppModel extends Model
                 // (could happens if multiple prio workers are up)
                 if ($this->isUpdateLocked()) {
                     $this->Log->create();
-                    $this->Log->save(array(
-                            'org' => 'SYSTEM',
-                            'model' => 'Server',
-                            'model_id' => 0,
-                            'email' => 'SYSTEM',
-                            'action' => 'update_db_worker',
-                            'user_id' => 0,
-                            'title' => __('Issues executing run_updates'),
-                            'change' => __('Updates are locked. Stopping worker gracefully')
+                    $this->Log->saveOrFailSilently(array(
+                        'org' => 'SYSTEM',
+                        'model' => 'Server',
+                        'model_id' => 0,
+                        'email' => 'SYSTEM',
+                        'action' => 'update_db_worker',
+                        'user_id' => 0,
+                        'title' => __('Issues executing run_updates'),
+                        'change' => __('Updates are locked. Stopping worker gracefully')
                     ));
                     if (!empty($job)) {
                         $job['Job']['progress'] = 100;
@@ -2327,7 +3329,7 @@ class AppModel extends Model
         return $remainingTime > 0 || $failThresholdReached;
     }
 
-    public function getUpdateFailNumber()
+    private function getUpdateFailNumber()
     {
         $this->AdminSetting = ClassRegistry::init('AdminSetting');
         $updateFailNumber = $this->AdminSetting->getSetting('update_fail_number');
@@ -2340,7 +3342,7 @@ class AppModel extends Model
         $this->AdminSetting->changeSetting('update_fail_number', 0);
     }
 
-    public function __increaseUpdateFailNumber()
+    private function __increaseUpdateFailNumber()
     {
         $this->AdminSetting = ClassRegistry::init('AdminSetting');
         $updateFailNumber = $this->AdminSetting->getSetting('update_fail_number');
@@ -2367,19 +3369,17 @@ class AppModel extends Model
 
     private function __runCleanDB()
     {
-        $cleanDB = $this->AdminSetting->find('first', array('conditions' => array('setting' => 'clean_db')));
-        if (empty($cleanDB) || $cleanDB['AdminSetting']['value'] == 1) {
+        $cleanDB = $this->AdminSetting->getSetting('clean_db');
+        if ($cleanDB === false || $cleanDB == 1) {
             $this->cleanCacheFiles();
-            if (empty($cleanDB)) {
-                $this->AdminSetting->create();
-                $cleanDB = array('AdminSetting' => array('setting' => 'clean_db', 'value' => 0));
-            } else {
-                $cleanDB['AdminSetting']['value'] = 0;
-            }
-            $this->AdminSetting->save($cleanDB);
+            $this->AdminSetting->changeSetting('clean_db', 0);
         }
     }
 
+    /**
+     * @param string $db_version
+     * @return array
+     */
     protected function findUpgrades($db_version)
     {
         $updates = array();
@@ -2419,82 +3419,166 @@ class AppModel extends Model
     private function __generateCorrelations()
     {
         if (Configure::read('MISP.background_jobs')) {
-            $Job = ClassRegistry::init('Job');
-            $Job->create();
-            $data = array(
-                    'worker' => 'default',
-                    'job_type' => 'generate correlation',
-                    'job_input' => 'All attributes',
-                    'status' => 0,
-                    'retries' => 0,
-                    'org' => 'ADMIN',
-                    'message' => 'Job created.',
+            /** @var Job $job */
+            $job = ClassRegistry::init('Job');
+            $jobId = $job->createJob(
+                'SYSTEM',
+                Job::WORKER_DEFAULT,
+                'generate correlation',
+                'All attributes',
+                'Job created.'
             );
-            $Job->save($data);
-            $jobId = $Job->id;
-            $process_id = CakeResque::enqueue(
-                    'default',
-                    'AdminShell',
-                    array('jobGenerateCorrelation', $jobId),
-                    true
+
+            $this->getBackgroundJobsTool()->enqueue(
+                BackgroundJobsTool::DEFAULT_QUEUE,
+                BackgroundJobsTool::CMD_ADMIN,
+                [
+                    'jobGenerateCorrelation',
+                    $jobId
+                ],
+                true,
+                $jobId
             );
-            $Job->saveField('process_id', $process_id);
+
         }
         return true;
     }
 
-    public function populateNotifications($user, $mode = 'full')
+    private function removeDuplicatedUUIDs()
     {
-        $notifications = array();
-        list($notifications['proposalCount'], $notifications['proposalEventCount']) = $this->_getProposalCount($user, $mode);
-        $notifications['total'] = $notifications['proposalCount'];
-        if (Configure::read('MISP.delegation')) {
-            $notifications['delegationCount'] = $this->_getDelegationCount($user);
-            $notifications['total'] += $notifications['delegationCount'];
-        }
-        return $notifications;
-    }
-
-    // if not using $mode === 'full', simply check if an entry exists. We really don't care about the real count for the top menu.
-    private function _getProposalCount($user, $mode = 'full')
-    {
-        $this->ShadowAttribute = ClassRegistry::init('ShadowAttribute');
-        $results[0] = $this->ShadowAttribute->find(
-            'count',
-            array(
-                'recursive' => -1,
-                'conditions' => array(
-                        'ShadowAttribute.event_org_id' => $user['org_id'],
-                        'ShadowAttribute.deleted' => 0,
-                )
-            )
+        $removedResults = array(
+            'Event' => $this->removeDuplicateEventUUIDs(),
+            'Attribute' => $this->removeDuplicateAttributeUUIDs(),
+            'Object' => $this->__removeDuplicateUUIDsGeneric(ClassRegistry::init('MispObject'), 'timestamp'),
+            'Sighting' => $this->__removeDuplicateUUIDsGeneric(ClassRegistry::init('Sighting'), 'date_sighting'),
+            'Dashboard' => $this->__removeDuplicateUUIDsGeneric(ClassRegistry::init('Dashboard'), 'timestamp'),
+            'Inbox' => $this->__removeDuplicateUUIDsGeneric(ClassRegistry::init('Inbox'), 'timestamp'),
+            'TagCollection' => $this->__removeDuplicateUUIDsGeneric(ClassRegistry::init('TagCollection')),
+            // 'GalaxyCluster' => $this->__removeDuplicateUUIDsGeneric(ClassRegistry::init('GalaxyCluster')),
         );
-        if ($mode === 'full') {
-            $results[1] = $this->ShadowAttribute->find(
-                'count',
-                array(
-                    'recursive' => -1,
-                    'conditions' => array(
-                            'ShadowAttribute.event_org_id' => $user['org_id'],
-                            'ShadowAttribute.deleted' => 0,
-                    ),
-                    'fields' => 'distinct event_id'
-                )
-            );
-        } else {
-            $results[1] = $results[0];
-        }
-        return $results;
+        $this->Log->createLogEntry('SYSTEM', 'update_database', 'Server', 0, __('Removed duplicated UUIDs'), __('Event: %s, Attribute: %s, Object: %s, Sighting: %s, Dashboard: %s, Inbox: %s, TagCollection: %s', h($removedResults['Event']), h($removedResults['Attribute']), h($removedResults['Object']), h($removedResults['Sighting']), h($removedResults['Dashboard']), h($removedResults['Inbox']), h($removedResults['TagCollection'])));
     }
 
-    private function _getDelegationCount($user)
+    private function __removeDuplicateUUIDsGeneric($model, $sort_by=false): int
     {
-        $this->EventDelegation = ClassRegistry::init('EventDelegation');
-        $delegations = $this->EventDelegation->find('count', array(
+        $className = get_class($model);
+        $alias = $model->alias;
+        $this->Log = ClassRegistry::init('Log');
+        $duplicates = $model->find('all', array(
+            'fields' => array('uuid', 'count(uuid) as occurrence'),
             'recursive' => -1,
-            'conditions' => array('EventDelegation.org_id' => $user['org_id'])
+            'group' => array('uuid HAVING occurrence > 1'),
         ));
-        return $delegations;
+        $counter = 0;
+        foreach ($duplicates as $duplicate) {
+            $options = [
+                'recursive' => -1,
+                'conditions' => array('uuid' => $duplicate[$alias]['uuid']),
+            ];
+            if (!empty($sort_by)) {
+                $options['order'] = "$sort_by DESC";
+            }
+            $fetched_duplicates = $model->find('all', $options);
+            unset($fetched_duplicates[0]);
+            foreach ($fetched_duplicates as $fetched_duplicate) {
+                $model->delete($fetched_duplicate[$alias]['id']);
+                $this->Log->createLogEntry('SYSTEM', 'delete', $className, $fetched_duplicate[$alias]['id'], __('Removed %s (%s)', $className, $fetched_duplicate[$alias]['id']), __('%s\'s UUID duplicated (%s)', $className, $fetched_duplicate[$alias]['uuid']));
+                $counter++;
+            }
+        }
+        return $counter;
+    }
+
+    private function removeDuplicateAttributeUUIDs()
+    {
+        $this->Attribute = ClassRegistry::init('Attribute');
+        $this->Log = ClassRegistry::init('Log');
+        $duplicates = $this->Attribute->find('all', array(
+            'fields' => array('Attribute.uuid', 'count(Attribute.uuid) as occurrence'),
+            'recursive' => -1,
+            'group' => array('Attribute.uuid HAVING occurrence > 1'),
+            'order' => false,
+        ));
+        $counter = 0;
+        foreach ($duplicates as $duplicate) {
+            $attributes = $this->Attribute->find('all', array(
+                'recursive' => -1,
+                'conditions' => array('uuid' => $duplicate['Attribute']['uuid']),
+                'contain' => array(
+                    'AttributeTag' => array(
+                        'fields' => array('tag_id')
+                    )
+                ),
+                'order' => 'timestamp DESC',
+            ));
+            $tagIDsOfFirstAttribute = Hash::extract($attributes[0]['AttributeTag'], '{n}.tag_id');
+            $eventIDOfFirstAttribute = $attributes[0]['Attribute']['event_id'];
+            unset($attributes[0]);
+            foreach ($attributes as $attribute) {
+                $tagIDs = Hash::extract($attribute['AttributeTag'], '{n}.tag_id');
+                $logTag = false;
+                $logEventID = false;
+                if (empty(array_diff($tagIDs, $tagIDsOfFirstAttribute))) {
+                    $logTag = true;
+                }
+                if ($eventIDOfFirstAttribute != $attribute['Attribute']['event_id']) {
+                    $logEventID = true;
+                }
+                $success = $this->Attribute->delete($attribute['Attribute']['id']);
+                if (empty($success)) {
+                    $this->Log->createLogEntry('SYSTEM', 'delete', 'Attribute', $attribute['Attribute']['id'], __('Could not remove attribute (%s)', $attribute['Attribute']['id']), __('Deletion was rejected.'));
+                    continue;
+                }
+                $logMessage = __('Attribute\'s UUID duplicated (%s).', $attribute['Attribute']['uuid']);
+                if ($logEventID) {
+                    $logMessage .= __(' Was part of another event_id (%s) than the one that was kept (%s).', $attribute['Attribute']['event_id'], $eventIDOfFirstAttribute);
+                } else if ($logTag) {
+                    $logMessage .= __(' Tag IDs attached [%s]', implode($tagIDs));
+                } else {
+                }
+                $this->Log->createLogEntry('SYSTEM', 'delete', 'Attribute', $attribute['Attribute']['id'], __('Removed attribute (%s)', $attribute['Attribute']['id']), $logMessage);
+                $counter++;
+            }
+        }
+        return $counter;
+    }
+
+    private function removeDuplicateEventUUIDs()
+    {
+        $this->Event = ClassRegistry::init('Event');
+        $this->Log = ClassRegistry::init('Log');
+        $duplicates = $this->Event->find('all', array(
+                'fields' => array('Event.uuid', 'count(Event.uuid) as occurrence'),
+                'recursive' => -1,
+                'group' => array('Event.uuid HAVING occurrence > 1'),
+        ));
+        $counter = 0;
+
+        // load this so we can remove the blocklist item that will be created, this is the one case when we do not want it.
+        if (Configure::read('MISP.enableEventBlocklisting') !== false) {
+            $this->EventBlocklist = ClassRegistry::init('EventBlocklist');
+        }
+
+        foreach ($duplicates as $duplicate) {
+            $events = $this->Event->find('all', array(
+                'recursive' => -1,
+                'conditions' => array('uuid' => $duplicate['Event']['uuid']),
+                'order' => 'timestamp DESC',
+            ));
+            unset($events[0]);
+            foreach ($events as $event) {
+                $uuid = $event['Event']['uuid'];
+                $this->Event->delete($event['Event']['id']);
+                $this->Log->createLogEntry('SYSTEM', 'delete', 'Event', $event['Event']['id'], __('Removed event (%s)', $event['Event']['id']), __('Event\'s UUID duplicated (%s)', $event['Event']['uuid']));
+                $counter++;
+                // remove the blocklist entry that we just created with the event deletion, if the feature is enabled
+                // We do not want to block the UUID, since we just deleted a copy
+                if (Configure::read('MISP.enableEventBlocklisting') !== false) {
+                    $this->EventBlocklist->deleteAll(array('EventBlocklist.event_uuid' => $uuid));
+                }
+            }
+        }
+        return $counter;
     }
 
     public function checkFilename($filename)
@@ -2506,37 +3590,11 @@ class AppModel extends Model
      * Similar method as `setupRedis`, but this method throw exception if Redis cannot be reached.
      * @return Redis
      * @throws Exception
+     * @deprecated
      */
     public function setupRedisWithException()
     {
-        if (self::$__redisConnection) {
-            return self::$__redisConnection;
-        }
-
-        if (!class_exists('Redis')) {
-            throw new Exception("Class Redis doesn't exists.");
-        }
-
-        $host = Configure::read('MISP.redis_host') ?: '127.0.0.1';
-        $port = Configure::read('MISP.redis_port') ?: 6379;
-        $database = Configure::read('MISP.redis_database') ?: 13;
-        $pass = Configure::read('MISP.redis_password');
-
-        $redis = new Redis();
-        if (!$redis->connect($host, $port)) {
-            throw new Exception("Could not connect to Redis: {$redis->getLastError()}");
-        }
-        if (!empty($pass)) {
-            if (!$redis->auth($pass)) {
-                throw new Exception("Could not authenticate to Redis: {$redis->getLastError()}");
-            }
-        }
-        if (!$redis->select($database)) {
-            throw new Exception("Could not select Redis database $database: {$redis->getLastError()}");
-        }
-
-        self::$__redisConnection = $redis;
-        return $redis;
+        return RedisTool::init();
     }
 
     /**
@@ -2548,7 +3606,7 @@ class AppModel extends Model
     public function setupRedis()
     {
         try {
-            return $this->setupRedisWithException();
+            return RedisTool::init();
         } catch (Exception $e) {
             return false;
         }
@@ -2557,24 +3615,19 @@ class AppModel extends Model
     public function getKafkaPubTool()
     {
         if (!$this->loadedKafkaPubTool) {
-            $this->loadKafkaPubTool();
+            App::uses('KafkaPubTool', 'Tools');
+            $kafkaPubTool = new KafkaPubTool();
+            $rdkafkaIni = Configure::read('Plugin.Kafka_rdkafka_config');
+            $rdkafkaIni = mb_ereg_replace("/\:\/\//", '', $rdkafkaIni);
+            $kafkaConf = array();
+            if (!empty($rdkafkaIni)) {
+                $kafkaConf = parse_ini_file($rdkafkaIni);
+            }
+            $brokers = Configure::read('Plugin.Kafka_brokers');
+            $kafkaPubTool->initTool($brokers, $kafkaConf);
+            $this->loadedKafkaPubTool = $kafkaPubTool;
         }
         return $this->loadedKafkaPubTool;
-    }
-
-    public function loadKafkaPubTool()
-    {
-        App::uses('KafkaPubTool', 'Tools');
-        $kafkaPubTool = new KafkaPubTool();
-        $rdkafkaIni = Configure::read('Plugin.Kafka_rdkafka_config');
-        $kafkaConf = array();
-        if (!empty($rdkafkaIni)) {
-            $kafkaConf = parse_ini_file($rdkafkaIni);
-        }
-        $brokers = Configure::read('Plugin.Kafka_brokers');
-        $kafkaPubTool->initTool($brokers, $kafkaConf);
-        $this->loadedKafkaPubTool = $kafkaPubTool;
-        return true;
     }
 
     public function publishKafkaNotification($topicName, $data, $action = false)
@@ -2599,26 +3652,37 @@ class AppModel extends Model
         return self::$loadedPubSubTool;
     }
 
-    public function getElasticSearchTool()
+    /**
+     * @return BackgroundJobsTool
+     */
+    public function getBackgroundJobsTool(): BackgroundJobsTool
     {
-        if (!$this->elasticSearchClient) {
-            $this->loadElasticSearchTool();
+        if (!self::$loadedBackgroundJobsTool) {
+            App::uses('BackgroundJobsTool', 'Tools');
+
+            // TODO: remove after CakeResque is deprecated
+            $settings = ['enabled' => false];
+            if (Configure::read('SimpleBackgroundJobs.enabled')) {
+                $settings = Configure::read('SimpleBackgroundJobs');
+            }
+
+            $backgroundJobsTool = new BackgroundJobsTool($settings);
+            self::$loadedBackgroundJobsTool = $backgroundJobsTool;
         }
-        return $this->elasticSearchClient;
+        return self::$loadedBackgroundJobsTool;
     }
 
-    public function loadElasticSearchTool()
+    /**
+     * Generate a generic subquery - options needs to include conditions
+     *
+     * @param AppModel $model
+     * @param array $options
+     * @param string $lookupKey
+     * @param bool $negation
+     * @return string[]
+     */
+    protected function subQueryGenerator(AppModel $model, array $options, $lookupKey, $negation = false)
     {
-        App::uses('ElasticSearchClient', 'Tools');
-        $client = new ElasticSearchClient();
-        $client->initTool();
-        $this->elasticSearchClient = $client;
-    }
-
-    // generate a generic subquery - options needs to include conditions
-    public function subQueryGenerator($model, $options, $lookupKey, $negation = false)
-    {
-        $db = $model->getDataSource();
         $defaults = array(
             'fields' => array('*'),
             'table' => $model->table,
@@ -2631,26 +3695,31 @@ class AppModel extends Model
             'recursive' => -1
         );
         $params = array();
-        foreach (array_keys($defaults) as $key) {
+        foreach ($defaults as $key => $defaultValue) {
             if (isset($options[$key])) {
                 $params[$key] = $options[$key];
             } else {
-                $params[$key] = $defaults[$key];
+                $params[$key] = $defaultValue;
             }
         }
-        $subQuery = $db->buildStatement(
-            $params,
-            $model
-        );
+        $db = $model->getDataSource();
+        $subQuery = $db->buildStatement($params, $model);
         if ($negation) {
             $subQuery = $lookupKey . ' NOT IN (' . $subQuery . ') ';
         } else {
             $subQuery = $lookupKey . ' IN (' . $subQuery . ') ';
         }
-        $conditions = array(
-            $db->expression($subQuery)->value
-        );
-        return $conditions;
+        return [$subQuery];
+    }
+
+    /**
+     * Returns estimated number of table rows
+     * @return int
+     */
+    public function tableRows()
+    {
+        $rows = $this->query("SELECT TABLE_ROWS FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = '{$this->table}';");
+        return $rows[0]['TABLES']['TABLE_ROWS'];
     }
 
     // start a benchmark run for the given bench name
@@ -2712,15 +3781,6 @@ class AppModel extends Model
         }
     }
 
-    public function getRowCount($table = false)
-    {
-        if (empty($table)) {
-            $table = $this->table;
-        }
-        $table_data = $this->query("show table status like '" . $table . "'");
-        return $table_data[0]['TABLES']['Rows'];
-    }
-
     public function benchmarkCustomAdd($valueToAdd = 0, $name = 'default', $customName = 'custom')
     {
         if (empty($this->__profiler[$name]['custom'][$customName])) {
@@ -2742,50 +3802,59 @@ class AppModel extends Model
         return true;
     }
 
-    public function setupHttpSocket($server, $HttpSocket = null, $timeout = false)
+    public function setupHttpSocket($server, $HttpSocket = null, $timeout = false, $model = null)
     {
         if (empty($HttpSocket)) {
             App::uses('SyncTool', 'Tools');
             $syncTool = new SyncTool();
-            $HttpSocket = $syncTool->setupHttpSocket($server, $timeout);
+
+            if ($model !== null) {
+                $HttpSocket = $syncTool->setupHttpSocket($server, $timeout, $model);
+            } else {
+                $HttpSocket = $syncTool->setupHttpSocket($server, $timeout);
+            }
         }
         return $HttpSocket;
     }
-
+    
     /**
      * @param array $server
      * @param string $model
      * @return array[]
      * @throws JsonException
      */
-    protected function setupSyncRequest(array $server, $model = 'Server')
+    public function setupSyncRequest(array $server, $model = 'Server')
     {
         $version = implode('.', $this->checkMISPVersion());
         $commit = $this->checkMIPSCommit();
-        $request = array(
+
+        $authkey = $server[$model]['authkey'];
+        App::uses('EncryptedValue', 'Tools');
+        if (EncryptedValue::isEncrypted($authkey)) {
+            $authkey = (string)new EncryptedValue($authkey);
+        }
+
+        return array(
             'header' => array(
-                'Authorization' => $server[$model]['authkey'],
+                'Authorization' => $authkey,
                 'Accept' => 'application/json',
                 'Content-Type' => 'application/json',
                 'User-Agent' => 'MISP ' . $version . (empty($commit) ? '' : ' - #' . $commit),
             )
         );
-        return $request;
     }
 
     /**
      * Returns MISP version from VERSION.json file as array with major, minor and hotfix keys.
      *
      * @return array
-     * @throws JsonException
+     * @throws Exception
      */
     public function checkMISPVersion()
     {
         static $versionArray;
         if ($versionArray === null) {
-            $file = new File(ROOT . DS . 'VERSION.json');
-            $versionArray = $this->jsonDecode($file->read());
-            $file->close();
+            $versionArray = FileAccessTool::readJsonFromFile(ROOT . DS . 'VERSION.json', true);
         }
         return $versionArray;
     }
@@ -2795,14 +3864,15 @@ class AppModel extends Model
      *
      * @return false|string
      */
-    protected function checkMIPSCommit()
+    public function checkMIPSCommit()
     {
         static $commit;
         if ($commit === null) {
-            $commit = shell_exec('git log --pretty="%H" -n1 HEAD');
-            if ($commit) {
-                $commit = trim($commit);
-            } else {
+            App::uses('GitTool', 'Tools');
+            try {
+                $commit = GitTool::currentCommit(ROOT);
+            } catch (Exception $e) {
+                $this->logException('Could not get current git commit', $e, LOG_NOTICE);
                 $commit = false;
             }
         }
@@ -2810,7 +3880,7 @@ class AppModel extends Model
     }
 
     // take filters in the {"OR" => [foo], "NOT" => [bar]} format along with conditions and set the conditions
-    public function generic_add_filter($conditions, &$filter, $keys)
+    public function generic_add_filter($conditions, &$filter, $keys, $conditional_for_filter = null)
     {
         $operator_composition = array(
             'NOT' => 'AND',
@@ -2831,30 +3901,50 @@ class AppModel extends Model
             foreach ($filters as $f) {
                 if ($f === -1) {
                     foreach ($keys as $key) {
-                        $temp['OR'][$key][] = -1;
+                        if ($this->checkParam($key)) {
+                            $temp['OR'][$key][] = -1;
+                        }
                     }
                     continue;
                 }
                 // split the filter params into two lists, one for substring searches one for exact ones
                 if (is_string($f) && ($f[strlen($f) - 1] === '%' || $f[0] === '%')) {
                     foreach ($keys as $key) {
-                        if ($operator === 'NOT') {
-                            $temp[] = array($key . ' NOT LIKE' => $f);
-                        } else {
-                            $temp[] = array($key . ' LIKE' => $f);
+                        if ($this->checkParam($key)) {
+                            if ($operator === 'NOT') {
+                                $temp[] = array($key . ' NOT LIKE' => $f);
+                            } else {
+                                $temp[] = array($key . ' LIKE' => $f);
+                                $temp[] = array($key => $f);
+                            }
                         }
                     }
                 } else {
                     foreach ($keys as $key) {
-                        if ($operator === 'NOT') {
-                            $temp[$key . ' !='][] = $f;
-                        } else {
-                            $temp['OR'][$key][] = $f;
+                        if ($this->checkParam($key)) {
+                            if ($operator === 'NOT') {
+                                $temp[$key . ' !='][] = $f;
+                            } else {
+                                $temp['OR'][$key . ' IN'][] = $f;
+                            }
                         }
                     }
                 }
             }
-            $conditions['AND'][] = array($operator_composition[$operator] => $temp);
+            if (!empty($conditional_for_filter)) {
+                $conditions['AND'][] = [
+                    'OR' => [
+                        $conditional_for_filter,
+                        [
+                            $operator_composition[$operator] => $temp
+                        ]
+                    ]
+                ];
+            } else {
+                $conditions['AND'][] = [
+                    $operator_composition[$operator] => $temp
+                ];
+            }
             if ($operator !== 'NOT') {
                 unset($filter[$operator]);
             }
@@ -2877,10 +3967,12 @@ class AppModel extends Model
             $filter = array();
             foreach ($temp as $f) {
                 $f = strval($f);
-                if ($f[0] === '!') {
-                    $filter['NOT'][] = substr($f, 1);
-                } else {
-                    $filter['OR'][] = $f;
+                if ($f !== '') {
+                    if ($f[0] === '!') {
+                        $filter['NOT'][] = substr($f, 1);
+                    } else {
+                        $filter['OR'][] = $f;
+                    }
                 }
             }
             return $filter;
@@ -2888,13 +3980,15 @@ class AppModel extends Model
         if (!isset($filter['OR']) && !isset($filter['NOT']) && !isset($filter['AND'])) {
             $temp = array();
             foreach ($filter as $param) {
-                $param = strval($param);
-                if (!empty($param)) {
-                    if ($param[0] === '!') {
-                        $temp['NOT'][] = substr($param, 1);
+                $paramString = strval($param);
+                if (!empty($paramString) && !is_int($param)) {
+                    if ($paramString[0] === '!') {
+                        $temp['NOT'][] = substr($paramString, 1);
                     } else {
-                        $temp['OR'][] = $param;
+                        $temp['OR'][] = $paramString;
                     }
+                } else if (isset($param)) {
+                    $temp['OR'][] = $param;
                 }
             }
             $filter = $temp;
@@ -2902,7 +3996,7 @@ class AppModel extends Model
         return $filter;
     }
 
-    public function convert_to_memory_limit_to_mb($val)
+    protected function convert_to_memory_limit_to_mb($val)
     {
         $val = trim($val);
         if ($val == -1) {
@@ -2927,11 +4021,6 @@ class AppModel extends Model
                 $val *= 1024;
         }
         return $val / (1024 * 1024);
-    }
-
-    public function getDefaultAttachments_dir()
-    {
-        return APP . 'files';
     }
 
     private function __bumpReferences()
@@ -2991,16 +4080,16 @@ class AppModel extends Model
             $this->Log = ClassRegistry::init('Log');
             $this->Log->create();
             $entry = array(
-                    'org' => 'SYSTEM',
-                    'model' => 'Server',
-                    'model_id' => 0,
-                    'email' => 'SYSTEM',
-                    'action' => 'update_database',
-                    'user_id' => 0,
-                    'title' => 'Bumped the timestamps of locked events containing object references.',
-                    'change' => sprintf('Event timestamps updated: %s; Object timestamps updated: %s', count($event_ids), count($object_ids))
+                'org' => 'SYSTEM',
+                'model' => 'Server',
+                'model_id' => 0,
+                'email' => 'SYSTEM',
+                'action' => 'update_database',
+                'user_id' => 0,
+                'title' => 'Bumped the timestamps of locked events containing object references.',
+                'change' => sprintf('Event timestamps updated: %s; Object timestamps updated: %s', count($event_ids), count($object_ids))
             );
-            $this->Log->save($entry);
+            $this->Log->saveOrFailSilently($entry);
         }
         return true;
     }
@@ -3010,27 +4099,35 @@ class AppModel extends Model
         return (new RandomTool())->random_str(false, 12);
     }
 
+    /**
+     * @param string|int $delta
+     * @return int Timestamp
+     */
     public function resolveTimeDelta($delta)
     {
         if (is_numeric($delta)) {
-            return $delta;
+            return (int)$delta;
         }
-        $multiplierArray = array('d' => 86400, 'h' => 3600, 'm' => 60, 's' => 1);
+
+        $multiplierArray = ['d' => 86400, 'h' => 3600, 'm' => 60, 's' => 1];
         $lastChar = strtolower(substr($delta, -1));
-        if (!is_numeric($lastChar) && array_key_exists($lastChar, $multiplierArray)) {
+        if (!is_numeric($lastChar) && isset($multiplierArray[$lastChar])) {
             $multiplier = $multiplierArray[$lastChar];
-            $delta = substr($delta, 0, -1);
-        } else if(strtotime($delta) !== false) {
-            return strtotime($delta);
-        } else {
-            // invalid filter, make sure we don't return anything
-            return time() + 1;
+            $timeDelta = substr($delta, 0, -1);
+            if (!is_numeric($timeDelta)) {
+                $this->log('Invalid time filter format ' . $delta, LOG_NOTICE);
+                return time() + 1;
+            }
+            return time() - ($timeDelta * $multiplier);
         }
-        if (!is_numeric($delta)) {
-            // Same here. (returning false dumps the whole database)
-            return time() + 1;
+
+        $time = strtotime($delta);
+        if ($time !== false) {
+            return $time;
         }
-        return time() - ($delta * $multiplier);
+
+        $this->log('Invalid time filter format ' . $delta, LOG_NOTICE);
+        return time() + 1;
     }
 
     private function __fixServerPullPushRules()
@@ -3074,7 +4171,8 @@ class AppModel extends Model
             $keyPath = explode('.', $query['list']['keyPath']);
             $valuePath = explode('.', $query['list']['valuePath']);
             if ($keyPath[1] === $valuePath[1]) { // same model
-                return array_column(array_column($results, $keyPath[1]), $valuePath[2], $keyPath[2]);
+                $results = array_column($results, $keyPath[1]);
+                return array_column($results, $valuePath[2], $keyPath[2]);
             }
         }
 
@@ -3093,7 +4191,7 @@ class AppModel extends Model
     {
         if ($state === 'before') {
             if (isset($query['fields']) && is_array($query['fields']) && count($query['fields']) === 1) {
-                if (strpos($query['fields'][0], '.') === false) {
+                if (!str_contains($query['fields'][0], '.')) {
                     $query['fields'][0] = $this->alias . '.' . $query['fields'][0];
                 }
 
@@ -3153,35 +4251,18 @@ class AppModel extends Model
      */
     protected function logException($message, Exception $exception, $type = LOG_ERR)
     {
-        $message .= "\n";
+        // If Sentry is installed, send exception to Sentry
+        if (function_exists('\Sentry\captureException') && $type <= LOG_ERR) {
+            \Sentry\captureException(new Exception($message, $type, $exception));
+        }
 
         do {
-            $message .= sprintf("[%s] %s",
-                get_class($exception),
-                $exception->getMessage()
-            );
+            $message .= sprintf("\n[%s] %s", get_class($exception), $exception->getMessage());
             $message .= "\nStack Trace:\n" . $exception->getTraceAsString();
             $exception = $exception->getPrevious();
         } while ($exception !== null);
 
         return $this->log($message, $type);
-    }
-
-    /**
-     * Generates random file name in tmp dir.
-     * @return string
-     */
-    protected function tempFileName()
-    {
-        return $this->tempDir() . DS . $this->generateRandomFileName();
-    }
-
-    /**
-     * @return string
-     */
-    protected function tempDir()
-    {
-        return Configure::read('MISP.tmpdir') ?: sys_get_temp_dir();
     }
 
     /**
@@ -3191,40 +4272,11 @@ class AppModel extends Model
      * @return array
      * @throws JsonException
      * @throws UnexpectedValueException
+     * @deprecated
      */
-    public function jsonDecode($json)
+    protected function jsonDecode($json)
     {
-        if (defined('JSON_THROW_ON_ERROR')) {
-            // JSON_THROW_ON_ERROR is supported since PHP 7.3
-            $decoded = json_decode($json, true, 512, JSON_THROW_ON_ERROR);
-        } else {
-            $decoded = json_decode($json, true);
-            if ($decoded === null) {
-                throw new UnexpectedValueException('Could not parse JSON: ' . json_last_error_msg(), json_last_error());
-            }
-        }
-
-        if (!is_array($decoded)) {
-            throw new UnexpectedValueException('JSON must be array type, get ' . gettype($decoded));
-        }
-        return $decoded;
-    }
-
-    /*
-     *  Temporary solution for utf8 columns until we migrate to utf8mb4
-     *  via https://stackoverflow.com/questions/16496554/can-php-detect-4-byte-encoded-utf8-chars
-     */
-    public function handle4ByteUnicode($input)
-    {
-        return preg_replace(
-            '%(?:
-            \xF0[\x90-\xBF][\x80-\xBF]{2}
-            | [\xF1-\xF3][\x80-\xBF]{3}
-            | \xF4[\x80-\x8F][\x80-\xBF]{2}
-            )%xs',
-            '?',
-            $input
-        );
+        return JsonTool::decodeArray($json);
     }
 
     /**
@@ -3234,12 +4286,97 @@ class AppModel extends Model
      */
     public function hasAny($conditions = null)
     {
-        return (bool)$this->find('first', array(
+        return (bool)$this->find('first', [
             'fields' => [$this->alias . '.' . $this->primaryKey],
             'conditions' => $conditions,
             'recursive' => -1,
             'callbacks' => false,
-        ));
+            'order' => [], // disable order
+        ]);
+    }
+
+    /**
+     * Faster version of original `isUnique` method
+     * {@inheritDoc}
+     */
+    public function isUnique($fields, $or = true)
+    {
+        if (is_array($or)) {
+            $isRule = (
+                array_key_exists('rule', $or) &&
+                array_key_exists('required', $or) &&
+                array_key_exists('message', $or)
+            );
+            if (!$isRule) {
+                $args = func_get_args();
+                $fields = $args[1];
+                $or = $args[2] ?? true;
+            }
+        }
+        if (!is_array($fields)) {
+            $fields = func_get_args();
+            $fieldCount = count($fields) - 1;
+            if (is_bool($fields[$fieldCount])) {
+                $or = $fields[$fieldCount];
+                unset($fields[$fieldCount]);
+            }
+        }
+
+        foreach ($fields as $field => $value) {
+            if (is_numeric($field)) {
+                unset($fields[$field]);
+
+                $field = $value;
+                $value = null;
+                if (isset($this->data[$this->alias][$field])) {
+                    $value = $this->data[$this->alias][$field];
+                }
+            }
+
+            if (!str_contains($field, '.')) {
+                unset($fields[$field]);
+                $fields[$this->alias . '.' . $field] = $value;
+            }
+        }
+
+        if ($or) {
+            $fields = array('or' => $fields);
+        }
+
+        if (!empty($this->id)) {
+            $fields[$this->alias . '.' . $this->primaryKey . ' !='] = $this->id;
+        }
+
+        return !$this->hasAny($fields);
+    }
+
+    /**
+     * Faster version of original `exists` method
+     * {@inheritDoc}
+     */
+    public function exists($id = null)
+    {
+        if ($id === null) {
+            $id = $this->getID();
+        }
+
+        if ($id === false || $this->useTable === false) {
+            return false;
+        }
+
+        return $this->hasAny([$this->alias . '.' . $this->primaryKey => $id]);
+    }
+
+    /**
+     * @param int $value Timestamp in microseconds
+     * @return string
+     */
+    protected function microTimestampToIso($value)
+    {
+        $sec = (int)($value / 1000000);
+        $micro = $value % 1000000;
+        $micro = str_pad($micro, 6, "0", STR_PAD_LEFT);
+        return DateTime::createFromFormat('U.u', "$sec.$micro")->format('Y-m-d\TH:i:s.uP');
     }
 
     /**
@@ -3294,5 +4431,431 @@ class AppModel extends Model
             return Configure::read("Plugin.Kafka_{$name}_notifications_topic") ?: null;
         }
         return null;
+    }
+
+    /**
+     * @param string $name
+     * @return bool
+     */
+    protected function pubToZmq($name)
+    {
+        static $zmqEnabled;
+        if ($zmqEnabled === null) {
+            $zmqEnabled = (bool)Configure::read('Plugin.ZeroMQ_enable');
+        }
+        if ($zmqEnabled) {
+            return Configure::read("Plugin.ZeroMQ_{$name}_notifications_enable");
+        }
+        return false;
+    }
+
+    /**
+     * @return bool Returns true if database is MySQL/Mariadb, false for PostgreSQL
+     */
+    protected function isMysql()
+    {
+        $dataSource = ConnectionManager::getDataSource('default');
+        return $dataSource instanceof Mysql;
+    }
+
+    /**
+     * executeTrigger
+     *
+     * @param string $trigger_id
+     * @param array $data Data to be passed to the workflow
+     * @param array $blockingErrors Errors will be appened if any
+     * @param array $logging If the execution failure should be logged
+     * @return boolean If the execution for the blocking path was a success
+     */
+    protected function executeTrigger($trigger_id, array $data=[], array &$blockingErrors=[], array $logging=[]): bool
+    {
+        if ($this->isTriggerCallable($trigger_id)) {
+           $success = $this->Workflow->executeWorkflowForTriggerRouter($trigger_id, $data, $blockingErrors, $logging);
+           if (!empty($logging) && empty($success)) {
+                $logging['message'] = !empty($logging['message']) ? $logging['message'] : __('Error while executing workflow.');
+                $errorMessage = implode(', ', $blockingErrors);
+                $this->loadLog()->createLogEntry('SYSTEM', $logging['action'], $logging['model'], $logging['id'], $logging['message'], __('Returned message: %s', $errorMessage));
+           }
+           return $success;
+        }
+        return true;
+    }
+
+    protected function isTriggerCallable($trigger_id): bool
+    {
+        static $workflowEnabled;
+        if ($workflowEnabled === null) {
+            $workflowEnabled = (bool)Configure::read('Plugin.Workflow_enable');
+        }
+
+        if (!$workflowEnabled) {
+            return false;
+        }
+
+        if ($this->Workflow === null) {
+            $this->Workflow = ClassRegistry::init('Workflow');
+        }
+        return $this->Workflow->checkTriggerEnabled($trigger_id) &&
+            $this->Workflow->checkTriggerListenedTo($trigger_id);
+    }
+
+    /**
+     * Use different CakeEventManager to fix memory leak
+     * @return CakeEventManager
+     */
+    public function getEventManager()
+    {
+        if (empty($this->_eventManager)) {
+            $this->_eventManager = new BetterCakeEventManager();
+            $this->_eventManager->attach($this->Behaviors);
+            $this->_eventManager->attach($this);
+        }
+        return $this->_eventManager;
+    }
+
+    private function __retireOldCorrelationEngine($user = null)
+    {
+        if ($user === null) {
+            $user = [
+                'id' => 0,
+                'email' => 'SYSTEM',
+                'Organisation' => [
+                    'name' => 'SYSTEM'
+                ]
+            ];
+        }
+        $this->Correlation = ClassRegistry::init('Correlation');
+        $this->Attribute = ClassRegistry::init('Attribute');
+        if (!Configure::read('MISP.background_jobs')) {
+            $this->Correlation->truncate($user, 'Legacy');
+            $this->Attribute->generateCorrelation();
+        } else {
+            $job = ClassRegistry::init('Job');
+            $jobId = $job->createJob(
+                'SYSTEM',
+                Job::WORKER_DEFAULT,
+                'truncate table',
+                $this->Correlation->validEngines['Legacy'],
+                'Job created.'
+            );
+            $this->getBackgroundJobsTool()->enqueue(
+                BackgroundJobsTool::DEFAULT_QUEUE,
+                BackgroundJobsTool::CMD_ADMIN,
+                [
+                    'truncateTable',
+                    0,
+                    'Legacy',
+                    $jobId
+                ],
+                true,
+                $jobId
+            );
+            $jobId = $job->createJob(
+                'SYSTEM',
+                Job::WORKER_DEFAULT,
+                'generate correlation',
+                'All attributes',
+                'Job created.'
+            );
+
+            $this->getBackgroundJobsTool()->enqueue(
+                BackgroundJobsTool::DEFAULT_QUEUE,
+                BackgroundJobsTool::CMD_ADMIN,
+                [
+                    'jobGenerateCorrelation',
+                    $jobId
+                ],
+                true,
+                $jobId
+            );
+        }
+    }
+
+    public function removeDuplicateCorrelationEntries($table_name = 'default_correlations')
+    {
+        // If there are duplicate entries, the query creating the `unique_correlation` index will result in an integrity constraint violation.
+        // The query below cleans up potential duplicates before creating the constraint.
+        return $this->query("
+            DELETE FROM `$table_name` WHERE id in (
+                SELECT m_id FROM (
+                    SELECT MAX(corr_a.id) as m_id, CONCAT(corr_a.attribute_id, \" - \", corr_a.1_attribute_id, \" - \", corr_a.value_id) as uniq FROM `$table_name` corr_a
+                    INNER JOIN `$table_name` corr_b on corr_a.attribute_id = corr_b.attribute_id
+                    WHERE
+                        corr_a.attribute_id = corr_b.attribute_id AND
+                        corr_a.1_attribute_id = corr_b.1_attribute_id AND
+                        corr_a.value_id = corr_b.value_id AND
+                        corr_a.id <> corr_b.id
+                    GROUP BY uniq
+                ) as c
+            );
+        ");
+    }
+
+    public function findOrder($order, $orderModel, $validOrderFields)
+    {
+        if (is_string($order)) {
+            $orderRules = explode(',', $order);
+        } elseif (is_array($order)) {
+            $orderRules = $order; // to support multiple column order
+        }
+
+        $order = array();
+        foreach ($orderRules as $rule) {
+            if (!is_string($rule)) {
+                return null;
+            }
+            $ruleItems = explode(' ', trim($rule));
+            $direction = 'asc';
+            if (count($ruleItems) === 2) {
+                if (strtolower(end($ruleItems)) === 'asc' || strtolower(end($ruleItems)) === 'desc') {
+                    $direction = end($ruleItems);
+                }
+            }
+            $orderPath = explode('.', $ruleItems[0]);
+            if (count($orderPath) === 1) {
+                $model = $orderModel;
+                $field = strtolower($orderPath[0]);
+            } elseif (count($orderPath) === 2) {
+                $model = $orderPath[0];
+                $field = strtolower($orderPath[1]);
+            } else {
+                return null;
+            }
+            if (
+                    (in_array($field, $validOrderFields) && $model === $orderModel) ||
+                    (array_key_exists($model, $validOrderFields) && in_array($field, $validOrderFields[$model]))
+            ) {
+                $order[] = $model . '.' . $field . ' ' . $direction;
+            } else {
+                return null;
+            }
+        }
+        if (count($order) > 0) {
+           return $order;
+        } 
+        return null;
+    }
+
+    /**
+     * @return string|null
+     */
+    public function _remoteIp()
+    {
+        static $remoteIp;
+
+        if ($remoteIp) {
+            return $remoteIp;
+        }
+
+        $clientIpHeader = Configure::read('MISP.log_client_ip_header');
+        if ($clientIpHeader && isset($_SERVER[$clientIpHeader])) {
+            $headerValue = $_SERVER[$clientIpHeader];
+            // X-Forwarded-For can contain multiple IPs, see https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/X-Forwarded-For
+            if (($commaPos = strpos($headerValue, ',')) !== false) {
+                $headerValue = substr($headerValue, 0, $commaPos);
+            }
+            $remoteIp = trim($headerValue);
+        } else {
+            $remoteIp = $_SERVER['REMOTE_ADDR'] ?? null;
+        }
+
+        return $remoteIp;
+    }
+
+    public function find($type = 'first', $query = array())
+    {
+        if (!empty($query['order']) && $this->validOrderClause($query['order']) === false) {
+            throw new InvalidArgumentException('Invalid order clause');
+        }
+        $results = parent::find($type, $query);
+        if (!empty($query['includeAnalystData']) && $this->Behaviors->enabled('AnalystDataParent')) {
+            if ($type === 'first') {
+                $results[$this->alias] = array_merge($results[$this->alias], $this->attachAnalystData($results[$this->alias]));
+            } else if ($type === 'all') {
+                foreach ($results as $k => $result) {
+                    $results[$k][$this->alias] = array_merge($results[$k][$this->alias], $this->attachAnalystData($results[$k][$this->alias]));
+                }
+            }
+        }
+        return $results;
+    }
+
+    private function validOrderClause($order)
+    {
+        $pattern = '/^[\w\_\-\.\(\) ]+$/';
+        if (is_string($order) && preg_match($pattern, $order)) {
+            return true;
+        }
+
+        if (is_array($order)) {
+            foreach ($order as $key => $value) {
+                if (is_string($key) && is_string($value) && preg_match($pattern, $key) && in_array(strtolower($value), ['asc', 'desc'])) {
+                    return true;
+                }
+                if (is_numeric($key) && is_string($value) && preg_match($pattern, $value)) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    protected function checkParam($param)
+    {
+        return preg_match('/^[\w\_\-\. ]+$/', $param);
+    }
+
+    public function moveImages()
+    {
+        $oldImageDir = APP . 'webroot/img';
+        $newImageDir = APP . 'files/img';
+        $oldOrgDir = new Folder($oldImageDir . '/orgs');
+        $oldCustomDir = new Folder($oldImageDir . '/custom');
+        $result = $oldOrgDir->copy([
+            'from' => $oldImageDir . '/orgs',
+            'to' => $newImageDir . '/orgs',
+            'scheme' => Folder::OVERWRITE,
+            'recursive' => true
+        ]);
+        if ($result) {
+            $oldOrgDir->delete();
+        }
+        $result = $oldCustomDir->copy([
+            'from' => $oldImageDir . '/custom',
+            'to' => $newImageDir . '/custom',
+            'scheme' => Folder::OVERWRITE,
+            'recursive' => true
+        ]);
+        if ($result) {
+            $oldCustomDir->delete();
+        }
+        return true;
+    }
+
+    public function getSearchParamsByToken($filters)
+    {
+        $token = $filters['search_token'];
+        $redis = $this->setupRedis();
+        if (!$redis) {
+            throw new Exception('Could not connect to Redis server');
+        }
+        $path = 'misp:search_tokens:' . $token;
+        $params = $redis->get($path);
+        if (empty($params)) {
+            throw new NotFoundException(__('Invalid search token or already expired.'));
+        }
+        $params = json_decode($params, true);
+        $params['search_token'] = $token;
+        $toUnset = ['page', 'limit', 'sort', 'direction'];
+        foreach ($toUnset as $unset) {
+            if (isset($params[$unset])) {
+                unset($params[$unset]);
+            }
+        }
+        return array_merge($filters, $params);
+    }
+
+    public function setSearchParamsByToken($params)
+    {
+        $redis = $this->setupRedis();
+        if (!$redis) {
+            throw new Exception('Could not connect to Redis server');
+        }
+        $token = bin2hex(Security::randomBytes(32));
+        $path = 'misp:search_tokens:' . $token;
+        $params = json_encode($params);
+        $redis->set($path, $params);
+        $redis->expire($path, 3600);
+        return $token;
+    }
+    
+    public function fixUpdatedGalaxyID()
+    {
+        $this->GalaxyCluster = ClassRegistry::init('GalaxyCluster');
+        $this->AuditLog = ClassRegistry::init('AuditLog');
+        $allUpdatedClusters = $this->AuditLog->find('all', [
+            'conditions' => [
+                'model' => 'GalaxyCluster',
+                'user_id !=' => 0, // Ignore clusters from misp-galaxy
+                'action' => ['edit',],
+            ],
+            'recursive' => -1,
+        ]);
+        $clusterIDsThatGotTheirGalaxyIDChanged = [];
+        foreach ($allUpdatedClusters as $cluster) {
+            if (!empty($cluster['AuditLog']['change']['galaxy_id'])) {
+                $oldID = $cluster['AuditLog']['change']['galaxy_id'][0];
+                $newID = $cluster['AuditLog']['change']['galaxy_id'][1];
+                $clusterIDsThatGotTheirGalaxyIDChanged[$cluster['AuditLog']['model_id']] = [$oldID, $newID];
+            }
+        }
+        $clustersThatGotTheirGalaxyIDChanged = $this->GalaxyCluster->find('all', [
+            'conditions' => [
+                'id' => array_keys($clusterIDsThatGotTheirGalaxyIDChanged),
+            ],
+            'recursive' => -1,
+        ]);
+        $toUpdate = [];
+        foreach ($clustersThatGotTheirGalaxyIDChanged as $cluster) {
+            $oldID = $clusterIDsThatGotTheirGalaxyIDChanged[$cluster['GalaxyCluster']['id']][0];
+            $newID = $clusterIDsThatGotTheirGalaxyIDChanged[$cluster['GalaxyCluster']['id']][1];
+            if ($oldID !== $newID) {
+                $toUpdate[] = [
+                    'id' => $cluster['GalaxyCluster']['id'],
+                    'galaxy_id' => $oldID,
+                ];
+                $this->GalaxyCluster->saveMany($toUpdate);
+            }
+        }
+
+        $options = [
+            'validate' => false,
+            'callbacks' => false,
+        ];
+        foreach (array_chunk($toUpdate, 1000) as $chunk) {
+            $this->GalaxyCluster->saveMany($chunk, $options);
+        }
+        return true;
+    }
+
+    public function checkDbSupport($functionality)
+    {
+        if (isset($this->getDataSource()->supports) && !empty($this->getDataSource()->supports[$functionality])) {
+            return $this->getDataSource()->supports[$functionality];
+        }
+        return false;
+    }
+
+    public function getIndexNameForColumn($column)
+    {
+        $table = $this->table;
+        
+        $indexes = $this->query("SHOW INDEX FROM `$table`");
+
+        foreach ($indexes as $index) {
+            if (
+                isset($index['STATISTICS']['Column_name']) &&
+                $index['STATISTICS']['Column_name'] === $column
+            ) {
+                return $index['STATISTICS']['Key_name'];
+            }
+        }
+        return null;
+    }
+
+    public function indexExists($table, $indexName) {
+        $db = $this->getDataSource();
+        $databaseName = $db->config['database'];
+    
+        $query = "
+            SELECT COUNT(1) AS found
+            FROM information_schema.STATISTICS
+            WHERE TABLE_SCHEMA = ?
+            AND TABLE_NAME = ?
+            AND INDEX_NAME = ?
+        ";
+    
+        return (bool)$this->query($query, [$databaseName, $table, $indexName])[0][0]['found'];
     }
 }

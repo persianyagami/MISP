@@ -1,11 +1,14 @@
 <?php
 App::uses('AppController', 'Controller');
+
+/**
+ * @property Module $Module
+ */
 class ModulesController extends AppController
 {
     public $components = array(
-    'Security',
-    'RequestHandler'
-  );
+        'RequestHandler'
+    );
 
     public function queryEnrichment()
     {
@@ -15,15 +18,14 @@ class ModulesController extends AppController
             throw new MethodNotAllowedException('No module chosen. The request body has to have the module key set.');
         }
         $modname = $data['module'];
-        $module = $this->Module->getEnabledModule($modname, 'hover');
+        $module = $this->Module->getEnabledModule($modname, 'hover', $this->Auth->user());
+        if (!is_array($module)) {
+            throw new MethodNotAllowedException('Module not found or not available.');
+        }
         if (!Configure::read('Plugin.Enrichment_' . $modname . '_enabled')) {
             throw new MethodNotAllowedException('Module not found or not available.');
         }
-        if (
-      !$this->_isSiteAdmin &&
-      Configure::read('Plugin.Enrichment_' . $modname . '_restrict') &&
-      Configure::read('Plugin.Enrichment_' . $modname . '_restrict') != $this->Auth->user('org_id')
-    ) {
+        if (!$this->Module->canUse($this->Auth->user(), 'Enrichment', $module)) {
             throw new MethodNotAllowedException('Module not found or not available.');
         }
         $options = array();

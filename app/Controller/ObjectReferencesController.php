@@ -6,13 +6,13 @@ App::uses('AppController', 'Controller');
  */
 class ObjectReferencesController extends AppController
 {
-    public $components = array('Security' ,'RequestHandler', 'Session');
+    public $components = array('RequestHandler', 'Session');
 
     public $paginate = array(
-            'limit' => 20,
-            'order' => array(
-                    'ObjectReference.id' => 'desc'
-            ),
+        'limit' => 20,
+        'order' => array(
+            'ObjectReference.id' => 'desc'
+        ),
     );
 
     public function add($objectId = false)
@@ -23,7 +23,7 @@ class ObjectReferencesController extends AppController
             }
         }
         if (empty($objectId)) {
-            throw new MethodNotAllowedException('No object defined.');
+            throw new NotFoundException('No object defined.');
         }
         if (Validation::uuid($objectId)) {
             $conditions = ['Object.uuid' => $objectId];
@@ -47,7 +47,7 @@ class ObjectReferencesController extends AppController
         $this->set('objectId', $object['Object']['id']);
         if ($this->request->is('post')) {
             if (!isset($this->request->data['ObjectReference'])) {
-                $this->request->data['ObjectReference'] = $this->request->data;
+                $this->request->data = array('ObjectReference' => $this->request->data);
             }
             list($referenced_id, $referenced_uuid, $referenced_type) = $this->ObjectReference->getReferencedInfo(trim($this->request->data['ObjectReference']['referenced_uuid']), $object, true, $this->Auth->user());
             $relationship_type = empty($this->request->data['ObjectReference']['relationship_type']) ? '' : $this->request->data['ObjectReference']['relationship_type'];
@@ -70,7 +70,7 @@ class ObjectReferencesController extends AppController
             $this->ObjectReference->create();
             $result = $this->ObjectReference->save(array('ObjectReference' => $data));
             if ($result) {
-                $this->ObjectReference->updateTimestamps($this->id, $data);
+                $this->ObjectReference->updateTimestamps($data);
                 if ($this->_isRest()) {
                     $object = $this->ObjectReference->find("first", array(
                         'recursive' => -1,
@@ -91,65 +91,92 @@ class ObjectReferencesController extends AppController
         } else {
             if ($this->_isRest()) {
                 return $this->RestResponse->describe('ObjectReferences', 'add', false, $this->response->type());
-            } else {
-                $events = $this->ObjectReference->Object->Event->find('all', array(
-                    'conditions' => array(
-                        'OR' => array(
-                            'Event.id' => $object['Event']['id'],
-                            'AND' => array(
-                                'Event.uuid' => $object['Event']['extends_uuid'],
-                                $this->ObjectReference->Object->Event->createEventConditions($this->Auth->user())
-                            )
-                        ),
+            }
+
+            $user = $this->Auth->user();
+            $attributeConditions = array('Attribute.deleted' => 0, 'Attribute.object_id' => 0);
+            $objectConditions = array('NOT' => array('Object.id' => $object['Object']['id']), 'Object.deleted' => 0);
+            $objectAttributeConditions = array('Attribute.deleted' => 0);
+            if (empty($user['Role']['perm_site_admin'])) {
+                $ownEventId = (int)$object['Event']['id'];
+                $sgids = $this->ObjectReference->Object->SharingGroup->authorizedIds($user);
+                $attributeConditions[] = array(
+                    'OR' => array(
+                        'Attribute.event_id' => $ownEventId,
+                        'Attribute.distribution' => array(1, 2, 3, 5),
+                        array('Attribute.distribution' => 4, 'Attribute.sharing_group_id' => $sgids),
+                    )
+                );
+                $objectConditions[] = array(
+                    'OR' => array(
+                        'Object.event_id' => $ownEventId,
+                        'Object.distribution' => array(1, 2, 3, 5),
+                        array('Object.distribution' => 4, 'Object.sharing_group_id' => $sgids),
+                    )
+                );
+                $objectAttributeConditions[] = array(
+                    'OR' => array(
+                        'Attribute.event_id' => $ownEventId,
+                        'Attribute.distribution' => array(1, 2, 3, 5),
+                        array('Attribute.distribution' => 4, 'Attribute.sharing_group_id' => $sgids),
+                    )
+                );
+            }
+            $events = $this->ObjectReference->Object->Event->find('all', array(
+                'conditions' => array(
+                    'OR' => array(
+                        'Event.id' => $object['Event']['id'],
+                        'AND' => array(
+                            'Event.uuid' => $object['Event']['extends_uuid'],
+                            $this->ObjectReference->Object->Event->createEventConditions($this->Auth->user())
+                        )
                     ),
-                    'recursive' => -1,
-                    'fields' => array('Event.id'),
-                    'contain' => array(
+                ),
+                'recursive' => -1,
+                'fields' => array('Event.id'),
+                'contain' => array(
+                    'Attribute' => array(
+                        'conditions' => $attributeConditions,
+                        'fields' => array('Attribute.id', 'Attribute.uuid', 'Attribute.type', 'Attribute.category', 'Attribute.value', 'Attribute.to_ids')
+                    ),
+                    'Object' => array(
+                        'conditions' => $objectConditions,
+                        'fields' => array('Object.id', 'Object.uuid', 'Object.name', 'Object.meta-category'),
                         'Attribute' => array(
-                            'conditions' => array('Attribute.deleted' => 0, 'Attribute.object_id' => 0),
+                            'conditions' => $objectAttributeConditions,
                             'fields' => array('Attribute.id', 'Attribute.uuid', 'Attribute.type', 'Attribute.category', 'Attribute.value', 'Attribute.to_ids')
-                        ),
-                        'Object' => array(
-                            'conditions' => array('NOT' => array('Object.id' => $object['Object']['id']), 'Object.deleted' => 0),
-                            'fields' => array('Object.id', 'Object.uuid', 'Object.name', 'Object.meta-category'),
-                            'Attribute' => array(
-                                'conditions' => array('Attribute.deleted' => 0),
-                                'fields' => array('Attribute.id', 'Attribute.uuid', 'Attribute.type', 'Attribute.category', 'Attribute.value', 'Attribute.to_ids')
-                            )
                         )
                     )
-                ));
-                if (!empty($events)) {
-                    $event = $events[0];
-                }
-                for ($i=1; $i < count($events); $i++) { 
-                    $event['Attribute'] = array_merge($event['Attribute'], $events[$i]['Attribute']);
-                    $event['Object'] = array_merge($event['Object'], $events[$i]['Object']);
-                }
-                $toRearrange = array('Attribute', 'Object');
-                foreach ($toRearrange as $d) {
-                    if (!empty($event[$d])) {
-                        $temp = array();
-                        foreach ($event[$d] as $data) {
-                            $temp[$data['uuid']] = $data;
-                        }
-                        $event[$d] = $temp;
-                    }
-                }
-                $this->loadModel('ObjectRelationship');
-                $relationships = $this->ObjectRelationship->find('column', array(
-                    'recursive' => -1,
-                    'fields' => ['name'],
-                ));
-                $relationships = array_combine($relationships, $relationships);
-                $relationships['custom'] = 'custom';
-                ksort($relationships);
-                $this->set('relationships', $relationships);
-                $this->set('event', $event);
-                $this->set('objectId', $object['Object']['id']);
-                $this->layout = 'ajax';
-                $this->render('ajax/add');
+                )
+            ));
+            $event = $events[0];
+            for ($i = 1; $i < count($events); $i++) {
+                $event['Attribute'] = array_merge($event['Attribute'], $events[$i]['Attribute']);
+                $event['Object'] = array_merge($event['Object'], $events[$i]['Object']);
             }
+            $toRearrange = array('Attribute', 'Object');
+            foreach ($toRearrange as $d) {
+                if (!empty($event[$d])) {
+                    $temp = array();
+                    foreach ($event[$d] as $data) {
+                        $temp[$data['uuid']] = $data;
+                    }
+                    $event[$d] = $temp;
+                }
+            }
+            $this->loadModel('ObjectRelationship');
+            $relationships = $this->ObjectRelationship->find('column', array(
+                'recursive' => -1,
+                'fields' => ['name'],
+            ));
+            $relationships = array_combine($relationships, $relationships);
+            $relationships['custom'] = 'custom';
+            ksort($relationships);
+            $this->set('relationships', $relationships);
+            $this->set('event', $event);
+            $this->set('objectId', $object['Object']['id']);
+            $this->layout = false;
+            $this->render('ajax/add');
         }
     }
 
@@ -203,12 +230,125 @@ class ObjectReferencesController extends AppController
             throw new NotFoundException(__('Invalid object reference.'));
         }
         // Check if user can view object that contains this reference
-        $object = $this->ObjectReference->Object->find($this->Auth->user(), [
-            'conditions' => $objectReference['ObjectReference']['object_id'],
+        $object = $this->ObjectReference->Object->fetchObjectSimple($this->Auth->user(), [
+            'conditions' => ['Object.id' => $objectReference['ObjectReference']['object_id']],
         ]);
-        if (!$object) {
+        if (empty($object)) {
             throw new NotFoundException(__('Invalid object reference.'));
         }
         return $this->RestResponse->viewData($objectReference, 'json');
+    }
+
+    public function bulkAdd($eventId, $selectedAttributes = '[]')
+    {
+        if (!$this->request->is('ajax')) {
+            throw new MethodNotAllowedException(__('This action can only be reached via AJAX.'));
+        }
+
+        $selectedAttributeIDs = $this->_jsonDecode($selectedAttributes);
+        $event = $this->ObjectReference->Object->Event->fetchEvent($this->Auth->user(), [
+            'eventid' => $eventId,
+        ]);
+        if (empty($event)) {
+            throw new NotFoundException(__('Invalid event.'));
+        }
+        $event = $event[0];
+        if (!$this->__canModifyEvent($event)) {
+            throw new ForbiddenException(__('You do not have permission to do that.'));
+        }
+
+        $selectedAttributes = [];
+        foreach ($event['Attribute'] as $attribute) {
+            if (in_array($attribute['id'], $selectedAttributeIDs)) {
+                $selectedAttributes[$attribute['id']] = $attribute;
+            }
+        }
+
+        if (empty($selectedAttributes)) {
+            throw new BadRequestException(__('No attribute selected.'));
+        }
+
+        if ($this->request->is('post')) {
+            $conditions = [
+                'Object.deleted' => 0,
+                'Object.event_id' => $eventId,
+                'Object.uuid' => $this->data['ObjectReference']['source_uuid'],
+            ];
+            $object = $this->ObjectReference->Object->find('first', array(
+                'conditions' => $conditions,
+                'recursive' => -1,
+            ));
+            if (empty($object)) {
+                throw new NotFoundException('Invalid object.');
+            }
+
+            if (!empty($this->request->data['ObjectReference']['relationship_type_select']) && $this->request->data['ObjectReference']['relationship_type_select'] != 'custom') {
+                $this->request->data['ObjectReference']['relationship_type'] = $this->request->data['ObjectReference']['relationship_type_select'];
+            }
+            $successCount = 0;
+            foreach ($selectedAttributes as $attributeID => $attribute) {
+                $referenced_type = 0; // reference type is always an attribute (for now?)
+                $newRelationship = array(
+                    'referenced_id' => $attributeID,
+                    'referenced_uuid' => $attribute['uuid'],
+                    'relationship_type' => $this->request->data['ObjectReference']['relationship_type'],
+                    'comment' => !empty($this->request->data['ObjectReference']['comment']) ? $this->request->data['ObjectReference']['comment'] : '',
+                    'event_id' => $event['Event']['id'],
+                    'object_uuid' => $object['Object']['uuid'],
+                    'source_uuid' => $object['Object']['uuid'],
+                    'object_id' => $object['Object']['id'],
+                    'referenced_type' => $referenced_type,
+                    'uuid' => CakeText::uuid()
+                );
+
+                $this->ObjectReference->create();
+                $result = $this->ObjectReference->save(['ObjectReference' => $newRelationship]);
+                if ($result) {
+                    $successCount += 1;
+                }
+            }
+            if ($successCount > 0) {
+                $this->ObjectReference->updateTimestamps($newRelationship);
+                if ($this->_isRest()) {
+                    $object = $this->ObjectReference->find('first', [
+                        'recursive' => -1,
+                        'conditions' => ['ObjectReference.id' => $this->ObjectReference->id]
+                    ]);
+                    $object['ObjectReference']['object_uuid'] = $object['Object']['uuid'];
+                    return $this->RestResponse->viewData($object, $this->response->type());
+                } elseif ($this->request->is('ajax')) {
+                    $message = __('Added %s Object references.', $successCount);
+                    return $this->RestResponse->saveSuccessResponse('ObjectReference', 'bulkAdd', $object['Object']['id'], false, $message);
+                }
+            } else {
+                if ($this->_isRest()) {
+                    return $this->RestResponse->saveFailResponse('ObjectReferences', 'bulkAdd', false, $this->ObjectReference->validationErrors, $this->response->type());
+                } elseif ($this->request->is('ajax')) {
+                    return $this->RestResponse->saveFailResponse('ObjectReferences', 'bulkAdd', $object['Object']['id'], $this->ObjectReference->validationErrors, $this->response->type());
+                }
+            }
+        }
+
+        $eventObjects = [];
+        $validSourceUuid = [];
+        foreach ($event['Object'] as $object) {
+            $validSourceUuid[$object['uuid']] = sprintf('[%s] %s ', $object['id'], $object['name']);
+            $eventObjects[$object['uuid']] = $object;
+        }
+
+        $this->loadModel('ObjectRelationship');
+        $relationships = $this->ObjectRelationship->find('column', array(
+            'recursive' => -1,
+            'fields' => ['name'],
+        ));
+        $relationships = array_combine($relationships, $relationships);
+        $relationships['custom'] = 'custom';
+        ksort($relationships);
+        $this->set('relationships', $relationships);
+        $this->set('validSourceUuid', $validSourceUuid);
+        $this->set('eventObjects', $eventObjects);
+        $this->set('selectedAttributes', $selectedAttributes);
+        $this->layout = false;
+        $this->render('ajax/bulkAdd');
     }
 }

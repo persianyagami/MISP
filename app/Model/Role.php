@@ -14,7 +14,7 @@ class Role extends AppModel
         'name' => array(
             'unique' => array(
                 'rule' => 'isUnique',
-                'message' => 'A role with this name already exists.' // TODO i18n?
+                'message' => 'A role with this name already exists.'
             ),
             'valueNotEmpty' => array(
                 'rule' => array('valueNotEmpty'),
@@ -52,7 +52,7 @@ class Role extends AppModel
         'permission' => "CASE WHEN (Role.perm_add AND Role.perm_modify AND Role.perm_publish) THEN '3' WHEN (Role.perm_add AND Role.perm_modify_org) THEN '2' WHEN (Role.perm_add) THEN '1' ELSE '0' END",
     );
 
-    public $permissionConstants = array(
+    const PERMISSION_CONSTANTS = array(
         'read_only' => 0,
         'manage_own' => 1,
         'manage_org' => 2,
@@ -69,8 +69,8 @@ class Role extends AppModel
         } elseif (!is_numeric($this->data['Role']['permission'])) {
             // If a constant was passed via the API, convert it to the numeric value
             // For invalid entries, choose permission level 0
-            if (isset($this->permissionConstants[$this->data['Role']['permission']])) {
-                $this->data['Role']['permission'] = $this->permissionConstants[$this->data['Role']['permission']];
+            if (isset(self::PERMISSION_CONSTANTS[$this->data['Role']['permission']])) {
+                $this->data['Role']['permission'] = self::PERMISSION_CONSTANTS[$this->data['Role']['permission']];
             } else {
                 $this->data['Role']['permission'] = 0;
             }
@@ -126,6 +126,13 @@ class Role extends AppModel
         }
         if (empty($this->data['Role']['rate_limit_count'])) {
             $this->data['Role']['rate_limit_count'] = 0;
+        } else {
+            if ($this->data['Role']['rate_limit_count'] < 0) {
+                $this->data['Role']['rate_limit_count'] = 0;
+            }
+        }
+        if (!empty($this->data['Role']['restsearch_limit_result']) && $this->data['Role']['restsearch_limit_result'] < 0) {
+            $this->data['Role']['restsearch_limit_result'] = 0;
         }
         return true;
     }
@@ -149,7 +156,7 @@ class Role extends AppModel
                 unset($results[$key]['Role']['perm_full']);
                 if (isset($results[$key]['Role']['permission'])) {
                     $results[$key]['Role']['permission_description'] =
-                    array_flip($this->permissionConstants)[$results[$key]['Role']['permission']];
+                    array_flip(self::PERMISSION_CONSTANTS)[$results[$key]['Role']['permission']];
                 }
             }
         }
@@ -233,6 +240,18 @@ class Role extends AppModel
                 'text' => 'Sync Actions',
                 'readonlyenabled' => true,
                 'title' => __('Synchronisation permission, can be used to connect two MISP instances create data on behalf of other users. Make sure that the role with this permission has also access to tagging and tag editing rights.')
+            ),
+            'perm_sync_internal' => array(
+                'id' => 'RolePermSyncInternal',
+                'text' => 'Internal Sync Actions',
+                'readonlyenabled' => false,
+                'title' => __('Internal Synchronisation permission, can be use to synchronise data with the internal strategy where distribution won\'t be downgraded after PULLing.')
+            ),
+            'perm_sync_authoritative' => array(
+                'id' => 'RolePermSyncAuthoritative',
+                'text' => 'Authoritative Sync Actions',
+                'readonlyenabled' => false,
+                'title' => __('Consider the source authoritative for synchronization. Data, such as tags, will be mirrored to match the source. For example, a tag may be deleted locally if it does not exist in the source.'),
             ),
             'perm_audit' => array(
                 'id' => 'RolePermAudit',
@@ -324,7 +343,32 @@ class Role extends AppModel
                 'text' => 'Warninglist Editor',
                 'readonlyenabled' => false,
                 'title' => __('Allow to manage warninglists.'),
-            )
+            ),
+            'perm_view_feed_correlations' => array(
+                'id' => 'RolePermViewFeedCorrelations',
+                'text' => 'View Feed Correlations',
+                'readonlyenabled' => true,
+                'title' => __('Allow the viewing of feed correlations. Enabling this can come at a performance cost.'),
+            ),
+            'perm_analyst_data' => array(
+                'id' => 'RolePermAnalystData',
+                'text' => 'Analyst Data Creator',
+                'readonlyenabled' => false,
+                'title' => __('Create or modify Analyst Data such as Analyst Notes or Opinions.'),
+            ),
+            'perm_skip_otp' => [
+                'id' => 'RolePermSkipOtp',
+                'text' => 'Skip OTP Reqs',
+                'readonlyenabled' => false,
+                'title' => __('Users using a role with this permission enabled will be able to skip creating/using OTP. This can be useful for internal service accounts for example, though use it with care. The permission has no effect on instances where otp_required is disabled.'),
+                'site_admin_optional' => true
+            ],
+            'perm_server_sign' => [
+                'id' => 'RolePermServerSign',
+                'text' => 'Server Signing',
+                'readonlyenabled' => false,
+                'title' => __('Users using a role with this permission will have access to the CryptographicsKeys/serverSign endpoint. This can be useful for internal services that need to sign data, though use it with care.'),
+            ]
         );
     }
 }

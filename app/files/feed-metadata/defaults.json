@@ -1,9 +1,35 @@
 [
   {
     "Feed": {
+      "name": "ELLIO: IP Feed (Community version)",
+      "provider": "ellio.tech",
+      "url": "https://cdn.ellio.tech/community-feed",
+      "rules": "{\"tags\":{\"OR\":[],\"NOT\":[]},\"orgs\":{\"OR\":[],\"NOT\":[]}}",
+      "enabled": true,
+      "distribution": "0",
+      "default": false,
+      "source_format": "freetext",
+      "fixed_event": true,
+      "delta_merge": true,
+      "publish": true,
+      "override_ids": false,
+      "settings": "{\"csv\":{\"value\":\"\",\"delimiter\":\",\"},\"common\":{\"excluderegex\":\"\"}}",
+      "input_source": "network",
+      "delete_local_file": false,
+      "lookup_visible": false
+    },
+    "Tag": {
+      "name": "osint:source-type=\"block-or-filter-list\"",
+      "colour": "#004f89",
+      "exportable": true,
+      "hide_tag": false
+    }
+  },
+  {
+    "Feed": {
       "name": "CIRCL OSINT Feed",
       "provider": "CIRCL",
-      "url": "https://www.circl.lu/doc/misp/feed-osint/",
+      "url": "https://www.circl.lu/doc/misp/feed-osint",
       "rules": "{\"tags\":{\"OR\":[],\"NOT\":[]},\"orgs\":{\"OR\":[],\"NOT\":[]}}",
       "enabled": true,
       "distribution": "3",
@@ -271,7 +297,7 @@
     "Feed": {
       "name": "OpenPhish url list",
       "provider": "openphish.com",
-      "url": "https://openphish.com/feed.txt",
+      "url": "https://raw.githubusercontent.com/openphish/public_feed/refs/heads/main/feed.txt",
       "rules": "",
       "enabled": false,
       "distribution": "3",
@@ -829,26 +855,6 @@
   },
   {
     "Feed": {
-      "name": "abuse.ch Dyre SSL IPBL",
-      "provider": "abuse.ch",
-      "url": "https://sslbl.abuse.ch/blacklist/dyre_sslipblacklist.csv",
-      "rules": "",
-      "enabled": true,
-      "distribution": "3",
-      "default": false,
-      "source_format": "csv",
-      "fixed_event": true,
-      "delta_merge": false,
-      "publish": false,
-      "override_ids": false,
-      "settings": "{\"csv\":{\"value\":\"1\",\"delimiter\":\",\"},\"common\":{\"excluderegex\":\"\"}}",
-      "input_source": "network",
-      "delete_local_file": false,
-      "lookup_visible": true
-    }
-  },
-  {
-    "Feed": {
       "name": "http://cybercrime-tracker.net hashlist",
       "provider": "http://cybercrime-tracker.net hashlist",
       "url": "https://cybercrime-tracker.net/ccamlist.php",
@@ -970,18 +976,18 @@
   {
     "Feed": {
       "name": "URLHaus Malware URLs",
-      "provider": "Abuse.ch",
-      "url": "https://urlhaus.abuse.ch/downloads/csv/",
+      "provider": "abuse.ch",
+      "url": "https://urlhaus.abuse.ch/downloads/csv_recent/",
       "rules": "{\"tags\":{\"OR\":[],\"NOT\":[]},\"orgs\":{\"OR\":[],\"NOT\":[]}}",
       "enabled": true,
       "distribution": "3",
       "default": false,
       "source_format": "csv",
       "fixed_event": true,
-      "delta_merge": false,
+      "delta_merge": true,
       "publish": false,
       "override_ids": false,
-      "settings": "{\"csv\":{\"value\":\"3\",\"delimiter\":\",\"},\"common\":{\"excluderegex\":\"\"}}",
+      "settings": "{\"csv\":{\"value\":\"3\",\"delimiter\":\",\"},\"common\":{\"excluderegex\":\"\"},\"disable_correlation\":\"1\"}",
       "input_source": "network",
       "delete_local_file": false,
       "lookup_visible": true
@@ -1075,26 +1081,6 @@
   },
   {
     "Feed": {
-      "name": "mirai.security.gives",
-      "provider": "security.gives",
-      "url": "https://mirai.security.gives/data/ip_list.txt",
-      "rules": "",
-      "enabled": false,
-      "distribution": "3",
-      "default": false,
-      "source_format": "freetext",
-      "fixed_event": true,
-      "delta_merge": false,
-      "publish": false,
-      "override_ids": false,
-      "settings": "{\"csv\":{\"value\":\"\",\"delimiter\":\",\"},\"common\":{\"excluderegex\":\"\"}}",
-      "input_source": "network",
-      "delete_local_file": false,
-      "lookup_visible": true
-    }
-  },
-  {
-    "Feed": {
       "name": "malsilo.url",
       "provider": "MalSilo",
       "url": "https://malsilo.gitlab.io/feeds/dumps/url_list.txt",
@@ -1168,26 +1154,6 @@
       "publish": false,
       "override_ids": false,
       "settings": "{\"csv\":{\"value\":\"\",\"delimiter\":\",\"},\"common\":{\"excluderegex\":\"\"}}",
-      "input_source": "network",
-      "delete_local_file": false,
-      "lookup_visible": true
-    }
-  },
-  {
-    "Feed": {
-      "name": "Benkow.cc RAT",
-      "provider": "benkow.cc",
-      "url": "https://benkow.cc/export_rat.php",
-      "rules": "{\"tags\":{\"OR\":[],\"NOT\":[]},\"orgs\":{\"OR\":[],\"NOT\":[]}}",
-      "enabled": false,
-      "distribution": "0",
-      "default": false,
-      "source_format": "csv",
-      "fixed_event": true,
-      "delta_merge": false,
-      "publish": false,
-      "override_ids": false,
-      "settings": "{\"csv\":{\"value\":\"3,4\",\"delimiter\":\";\"},\"common\":{\"excluderegex\":\"\"}}",
       "input_source": "network",
       "delete_local_file": false,
       "lookup_visible": true
@@ -1471,7 +1437,7 @@
     "Feed": {
       "name": "Malware Bazaar",
       "provider": "abuse.ch",
-      "url": "https://bazaar.abuse.ch/export/txt/md5/full/",
+      "url": "https://bazaar.abuse.ch/export/txt/md5/recent/",
       "rules": "{\"tags\":{\"OR\":[],\"NOT\":[]},\"orgs\":{\"OR\":[],\"NOT\":[]},\"url_params\":\"\"}",
       "enabled": false,
       "distribution": "0",
@@ -1522,7 +1488,7 @@
   {
     "Feed": {
       "name": "Threatfox",
-      "provider": "Abuse.ch",
+      "provider": "abuse.ch",
       "url": "https://threatfox.abuse.ch/downloads/misp/",
       "rules": "{\"tags\":{\"OR\":[],\"NOT\":[]},\"orgs\":{\"OR\":[],\"NOT\":[]},\"url_params\":\"\"}",
       "enabled": true,
@@ -1551,7 +1517,7 @@
   {
     "Feed": {
       "name": "MalwareBazaar",
-      "provider": "Abuse.ch",
+      "provider": "abuse.ch",
       "url": "https://bazaar.abuse.ch/downloads/misp/",
       "rules": "{\"tags\":{\"OR\":[],\"NOT\":[]},\"orgs\":{\"OR\":[],\"NOT\":[]}}",
       "enabled": false,
@@ -1571,10 +1537,276 @@
   {
     "Feed": {
       "name": "URLhaus",
-      "provider": "Abuse.ch",
+      "provider": "abuse.ch",
       "url": "https://urlhaus.abuse.ch/downloads/misp/",
       "rules": "{\"tags\":{\"OR\":[],\"NOT\":[]},\"orgs\":{\"OR\":[],\"NOT\":[]}}",
       "enabled": false,
+      "distribution": "0",
+      "default": false,
+      "source_format": "misp",
+      "fixed_event": false,
+      "delta_merge": false,
+      "publish": false,
+      "override_ids": false,
+      "settings": "{\"csv\":{\"value\":\"\",\"delimiter\":\"\"},\"common\":{\"excluderegex\":\"\"},\"disable_correlation\":\"1\"}",
+      "input_source": "network",
+      "delete_local_file": false,
+      "lookup_visible": false
+    }
+  },
+  {
+    "Feed": {
+      "name": "URL Seen in honeypots",
+      "provider": "APNIC Community Honeynet Project",
+      "url": "https://feeds.honeynet.asia/url/latest-url-unique.csv",
+      "rules": "",
+      "enabled": false,
+      "distribution": "0",
+      "sharing_group_id": "0",
+      "default": false,
+      "source_format": "freetext",
+      "fixed_event": true,
+      "delta_merge": false,
+      "publish": false,
+      "override_ids": false,
+      "settings": "{\"csv\":{\"value\":\"\",\"delimiter\":\",\"},\"common\":{\"excluderegex\":\"\"}}",
+      "input_source": "network",
+      "delete_local_file": false,
+      "lookup_visible": true,
+      "caching_enabled": true,
+      "force_to_ids": false
+    },
+    "Tag": {
+      "name": "osint:source-type=\"block-or-filter-list\"",
+      "colour": "#004f89",
+      "exportable": true,
+      "hide_tag": false
+    }
+  },
+  {
+    "Feed": {
+      "name": "SSH Bruteforce IPs",
+      "provider": "APNIC Community Honeynet Project",
+      "url": "https://feeds.honeynet.asia/bruteforce/latest-sshbruteforce-unique.csv",
+      "rules": "",
+      "enabled": false,
+      "distribution": "0",
+      "sharing_group_id": "0",
+      "default": false,
+      "source_format": "csv",
+      "fixed_event": true,
+      "delta_merge": false,
+      "publish": false,
+      "override_ids": false,
+      "settings": "{\"csv\":{\"value\":\"\",\"delimiter\":\",\"},\"common\":{\"excluderegex\":\"\"}}",
+      "input_source": "network",
+      "delete_local_file": false,
+      "lookup_visible": true,
+      "caching_enabled": true,
+      "force_to_ids": false
+    },
+    "Tag": {
+      "name": "osint:source-type=\"block-or-filter-list\"",
+      "colour": "#004f89",
+      "exportable": true,
+      "hide_tag": false
+    }
+  },
+  {
+    "Feed": {
+      "name": "Telnet Bruteforce IPs",
+      "provider": "APNIC Community Honeynet Project",
+      "url": "https://feeds.honeynet.asia/bruteforce/latest-telnetbruteforce-unique.csv",
+      "rules": "",
+      "enabled": false,
+      "distribution": "0",
+      "sharing_group_id": "0",
+      "default": false,
+      "source_format": "csv",
+      "fixed_event": true,
+      "delta_merge": false,
+      "publish": false,
+      "override_ids": false,
+      "settings": "{\"csv\":{\"value\":\"\",\"delimiter\":\",\"},\"common\":{\"excluderegex\":\"\"}}",
+      "input_source": "network",
+      "delete_local_file": false,
+      "lookup_visible": true,
+      "caching_enabled": true,
+      "force_to_ids": false
+    },
+    "Tag": {
+      "name": "osint:source-type=\"block-or-filter-list\"",
+      "colour": "#004f89",
+      "exportable": true,
+      "hide_tag": false
+    }
+  },
+  {
+    "Feed": {
+      "name": "threatfox indicators of compromise",
+      "provider": "abuse.ch",
+      "url": "https://threatfox.abuse.ch/export/csv/recent/",
+      "rules": "{\"tags\":{\"OR\":[],\"NOT\":[]},\"orgs\":{\"OR\":[],\"NOT\":[]}}",
+      "enabled": false,
+      "distribution": "0",
+      "sharing_group_id": "0",
+      "default": false,
+      "source_format": "csv",
+      "fixed_event": true,
+      "delta_merge": false,
+      "publish": false,
+      "override_ids": false,
+      "settings": "{\"csv\":{\"value\":\"3\",\"delimiter\":\"\"},\"common\":{\"excluderegex\":\"\"}}",
+      "input_source": "network",
+      "delete_local_file": false,
+      "lookup_visible": true,
+      "caching_enabled": true,
+      "force_to_ids": false
+    },
+    "Tag": {
+      "name": "osint:source-type=\"block-or-filter-list\"",
+      "colour": "#004f89",
+      "exportable": true,
+      "hide_tag": false
+    }
+  },
+  {
+    "Feed": {
+      "name": "James Brine Bruteforce IPs",
+      "provider": "jamesbrine.com.au",
+      "url": "https://jamesbrine.com.au/csv",
+      "rules": "{\"tags\":{\"OR\":[],\"NOT\":[]},\"orgs\":{\"OR\":[],\"NOT\":[]},\"type_attributes\":{\"NOT\":[]},\"type_objects\":{\"NOT\":[]},\"url_params\":\"\"}",
+      "enabled": true,
+      "distribution": "3",
+      "default": false,
+      "source_format": "csv",
+      "fixed_event": true,
+      "delta_merge": false,
+      "publish": false,
+      "override_ids": false,
+      "settings": "{\"disable_correlation\":\"0\",\"csv\":{\"value\":\"1\",\"delimiter\":\"\"},\"common\":{\"excluderegex\":\"\"}}",
+      "input_source": "network",
+      "delete_local_file": false,
+      "lookup_visible": false
+    },
+    "Tag": {
+      "name": "osint:source-type=\"block-or-filter-list\"",
+      "colour": "#004f89",
+      "exportable": true,
+      "hide_tag": false
+    }
+  },
+  {
+    "Feed": {
+      "name": "List of malicious domains in Poland",
+      "provider": "CERT-PL",
+      "url": "https://hole.cert.pl/domains/domains.txt",
+      "rules": "{\"tags\":{\"OR\":[],\"NOT\":[]},\"orgs\":{\"OR\":[],\"NOT\":[]},\"type_attributes\":{\"NOT\":[]},\"type_objects\":{\"NOT\":[]},\"url_params\":\"\"}",
+      "enabled": true,
+      "distribution": "0",
+      "sharing_group_id": "0",
+      "default": false,
+      "source_format": "freetext",
+      "fixed_event": true,
+      "delta_merge": true,
+      "publish": false,
+      "override_ids": false,
+      "settings": "{\"disable_correlation\":\"0\",\"csv\":{\"value\":\"\",\"delimiter\":\"\"},\"common\":{\"excluderegex\":\"\"}}",
+      "input_source": "network",
+      "delete_local_file": false,
+      "lookup_visible": true,
+      "caching_enabled": true
+    }
+  },
+  {
+    "Feed": {
+      "name": "List of malicious hashes",
+      "provider": "Banco do Brasil S.A",
+      "url": "https://cti.bb.com.br:8443/hash-list.csv",
+      "rules": "{\"tags\":{\"OR\":[],\"NOT\":[]},\"orgs\":{\"OR\":[],\"NOT\":[]},\"type_attributes\":{\"NOT\":[]},\"type_objects\":{\"NOT\":[]},\"url_params\":\"\"}",
+      "enabled": true,
+      "distribution": "0",
+      "default": false,
+      "source_format": "csv",
+      "fixed_event": true,
+      "delta_merge": false,
+      "event_id": "0",
+      "publish": false,
+      "override_ids": false,
+      "settings": "{\"disable_correlation\":\"0\",\"csv\":{\"value\":\"\",\"delimiter\":\"\"},\"common\":{\"excluderegex\":\"\"}}",
+      "input_source": "network",
+      "delete_local_file": false,
+      "lookup_visible": false,
+      "headers": "",
+      "caching_enabled": true,
+      "force_to_ids": false
+    },
+    "Tag": {
+      "name": "osint:source-type=\"block-or-filter-list\"",
+      "colour": "#004577",
+      "exportable": true,
+      "hide_tag": false
+    }
+  },
+{
+    "Feed": {
+      "name": "Shreshta: Newly Registered domain names(NRD) - 1 week (Community policy feed)",
+      "provider": "shreshtait.com",
+      "url": "https://shreshtait.com/newly-registered-domains/nrd-1w",
+      "rules": "{\"tags\":{\"OR\":[],\"NOT\":[]},\"orgs\":{\"OR\":[],\"NOT\":[]}}",
+      "enabled": true,
+      "distribution": "0",
+      "default": false,
+      "source_format": "freetext",
+      "fixed_event": true,
+      "delta_merge": true,
+      "publish": true,
+      "override_ids": false,
+      "settings": "{\"csv\":{\"value\":\"\",\"delimiter\":\",\"},\"common\":{\"excluderegex\":\"\"}}",
+      "input_source": "network",
+      "delete_local_file": false,
+      "lookup_visible": false
+    },
+    "Tag": {
+      "name": "osint:source-type=\"block-or-filter-list\"",
+      "colour": "#004f89",
+      "exportable": true,
+      "hide_tag": false
+    }
+  },
+  {
+    "Feed": {
+      "name": "Shreshta: Newly Registered domain names (NRD) - 1 month (Community policy feed)",
+      "provider": "shreshtait.com",
+      "url": "https://shreshtait.com/newly-registered-domains/nrd-1m",
+      "rules": "{\"tags\":{\"OR\":[],\"NOT\":[]},\"orgs\":{\"OR\":[],\"NOT\":[]}}",
+      "enabled": true,
+      "distribution": "0",
+      "default": false,
+      "source_format": "freetext",
+      "fixed_event": true,
+      "delta_merge": true,
+      "publish": true,
+      "override_ids": false,
+      "settings": "{\"csv\":{\"value\":\"\",\"delimiter\":\",\"},\"common\":{\"excluderegex\":\"\"}}",
+      "input_source": "network",
+      "delete_local_file": false,
+      "lookup_visible": false
+    },
+    "Tag": {
+      "name": "osint:source-type=\"block-or-filter-list\"",
+      "colour": "#004f89",
+      "exportable": true,
+      "hide_tag": false
+    }
+  },
+  {
+    "Feed": {
+      "name": "Infoblox-Threat-Intelligence",
+      "provider": "infoblox.com",
+      "url": "https:\/\/raw.githubusercontent.com\/infobloxopen\/threat-intelligence\/main\/indicators\/misp",
+      "rules": "{\"tags\":{\"OR\":[],\"NOT\":[]},\"orgs\":{\"OR\":[],\"NOT\":[]}}",
+      "enabled": true,
       "distribution": "0",
       "default": false,
       "source_format": "misp",
@@ -1587,92 +1819,367 @@
       "delete_local_file": false,
       "lookup_visible": false
     }
-  }, 
+  },
   {
-   "Feed": {
-        "name": "URL Seen in honeypots",
-        "provider": "APNIC Community Honeynet Project",
-        "url": "https:\/\/feeds.honeynet.asia\/url\/latest-url-unique.csv",
-        "rules": "",
-        "enabled": false,
-        "distribution": "0",
-        "sharing_group_id": "0",
-        "default": false,
-        "source_format": "freetext",
-        "fixed_event": true,
-        "delta_merge": false,
-        "publish": false,
-        "override_ids": false,
-        "settings": "{\"csv\":{\"value\":\"\",\"delimiter\":\",\"},\"common\":{\"excluderegex\":\"\"}}",
-        "input_source": "network",
-        "delete_local_file": false,
-        "lookup_visible": true,
-        "caching_enabled": true,
-        "force_to_ids": false
-       }, 
+    "Feed": {
+      "name": "Threatview.io - OSINT Threat Feed",
+      "provider": "threatview.io",
+      "url": "https://threatview.io/Downloads/Experimental-IOC-Tweets.txt",
+      "rules": "{\"tags\":{\"OR\":[],\"NOT\":[]},\"orgs\":{\"OR\":[],\"NOT\":[]},\"type_attributes\":{\"NOT\":[]},\"type_objects\":{\"NOT\":[]},\"url_params\":\"\"}",
+      "enabled": true,
+      "distribution": "0",
+      "sharing_group_id": "0",
+      "default": false,
+      "source_format": "freetext",
+      "fixed_event": true,
+      "delta_merge": true,
+      "publish": false,
+      "override_ids": false,
+      "settings": "{\"disable_correlation\":\"0\",\"csv\":{\"value\":\"\",\"delimiter\":\"\"},\"common\":{\"excluderegex\":\"\\/^#.*|Threatview.*\\/i\"}}",
+      "input_source": "network",
+      "delete_local_file": false,
+      "lookup_visible": true,
+      "headers": "",
+      "caching_enabled": false,
+      "force_to_ids": false
+    },
     "Tag": {
       "name": "osint:source-type=\"block-or-filter-list\"",
       "colour": "#004f89",
       "exportable": true,
       "hide_tag": false
     }
-  }, 
+  },
   {
-   "Feed": {
-        "name": "SSH Bruteforce IPs",
-        "provider": "APNIC Community Honeynet Project",
-        "url": "https:\/\/feeds.honeynet.asia\/bruteforce\/latest-sshbruteforce-unique.csv",
-        "rules": "",
-        "enabled": false,
-        "distribution": "0",
-        "sharing_group_id": "0",
-        "default": false,
-        "source_format": "csv",
-        "fixed_event": true,
-        "delta_merge": false,
-        "publish": false,
-        "override_ids": false,
-        "settings": "{\"csv\":{\"value\":\"\",\"delimiter\":\",\"},\"common\":{\"excluderegex\":\"\"}}",
-        "input_source": "network",
-        "delete_local_file": false,
-        "lookup_visible": true,
-        "caching_enabled": true,
-        "force_to_ids": false
-       }, 
+    "Feed": {
+      "name": "Threatview.io - C2 Hunt Feed",
+      "provider": "threatview.io",
+      "url": "https://threatview.io/Downloads/High-Confidence-CobaltStrike-C2%20-Feeds.txt",
+      "rules": "{\"tags\":{\"OR\":[],\"NOT\":[]},\"orgs\":{\"OR\":[],\"NOT\":[]},\"type_attributes\":{\"NOT\":[]},\"type_objects\":{\"NOT\":[]},\"url_params\":\"\"}",
+      "enabled": true,
+      "distribution": "0",
+      "sharing_group_id": "0",
+      "default": false,
+      "source_format": "csv",
+      "fixed_event": true,
+      "delta_merge": true,
+      "publish": false,
+      "override_ids": false,
+      "settings": "{\"disable_correlation\":\"0\",\"csv\":{\"value\":\"1,3\",\"delimiter\":\"\"},\"common\":{\"excluderegex\":\"\\/^#.*|Threatview.*\\/i\"}}",
+      "input_source": "network",
+      "delete_local_file": false,
+      "lookup_visible": true,
+      "headers": "",
+      "caching_enabled": false,
+      "force_to_ids": false
+    },
     "Tag": {
       "name": "osint:source-type=\"block-or-filter-list\"",
       "colour": "#004f89",
       "exportable": true,
       "hide_tag": false
     }
-  }, 
+  },
   {
-   "Feed": {
-        "name": "Telnet Bruteforce IPs",
-        "provider": "APNIC Community Honeynet Project",
-        "url": "https:\/\/feeds.honeynet.asia\/bruteforce\/latest-telnetbruteforce-unique.csv",
-        "rules": "",
-        "enabled": false,
-        "distribution": "0",
-        "sharing_group_id": "0",
-        "default": false,
-        "source_format": "csv",
-        "fixed_event": true,
-        "delta_merge": false,
-        "publish": false,
-        "override_ids": false,
-        "settings": "{\"csv\":{\"value\":\"\",\"delimiter\":\",\"},\"common\":{\"excluderegex\":\"\"}}",
-        "input_source": "network",
-        "delete_local_file": false,
-        "lookup_visible": true,
-        "caching_enabled": true,
-        "force_to_ids": false
-       }, 
+    "Feed": {
+      "name": "Threatview.io - IP Blocklist",
+      "provider": "threatview.io",
+      "url": "https://threatview.io/Downloads/IP-High-Confidence-Feed.txt",
+      "rules": "{\"tags\":{\"OR\":[],\"NOT\":[]},\"orgs\":{\"OR\":[],\"NOT\":[]},\"type_attributes\":{\"NOT\":[]},\"type_objects\":{\"NOT\":[]},\"url_params\":\"\"}",
+      "enabled": true,
+      "distribution": "0",
+      "sharing_group_id": "0",
+      "default": false,
+      "source_format": "freetext",
+      "fixed_event": true,
+      "delta_merge": true,
+      "publish": false,
+      "override_ids": false,
+      "settings": "{\"disable_correlation\":\"0\",\"csv\":{\"value\":\"\",\"delimiter\":\"\"},\"common\":{\"excluderegex\":\"\"}}",
+      "input_source": "network",
+      "delete_local_file": false,
+      "lookup_visible": true,
+      "headers": "",
+      "caching_enabled": false,
+      "force_to_ids": false
+    },
     "Tag": {
       "name": "osint:source-type=\"block-or-filter-list\"",
       "colour": "#004f89",
       "exportable": true,
       "hide_tag": false
     }
-  } 
+  },
+  {
+    "Feed": {
+      "name": "Threatview.io - Domain Blocklist",
+      "provider": "threatview.io",
+      "url": "https://threatview.io/Downloads/DOMAIN-High-Confidence-Feed.txt",
+      "rules": "{\"tags\":{\"OR\":[],\"NOT\":[]},\"orgs\":{\"OR\":[],\"NOT\":[]},\"type_attributes\":{\"NOT\":[]},\"type_objects\":{\"NOT\":[]},\"url_params\":\"\"}",
+      "enabled": true,
+      "distribution": "0",
+      "sharing_group_id": "0",
+      "default": false,
+      "source_format": "freetext",
+      "fixed_event": true,
+      "delta_merge": true,
+      "publish": false,
+      "override_ids": false,
+      "settings": "{\"disable_correlation\":\"0\",\"csv\":{\"value\":\"\",\"delimiter\":\"\"},\"common\":{\"excluderegex\":\"\"}}",
+      "input_source": "network",
+      "delete_local_file": false,
+      "lookup_visible": true,
+      "headers": "",
+      "caching_enabled": false,
+      "force_to_ids": false
+    },
+    "Tag": {
+      "name": "osint:source-type=\"block-or-filter-list\"",
+      "colour": "#004f89",
+      "exportable": true,
+      "hide_tag": false
+    }
+  },
+  {
+    "Feed": {
+      "name": "Threatview.io - MD5 Hash Blocklist",
+      "provider": "threatview.io",
+      "url": "https://threatview.io/Downloads/MD5-HASH-ALL.txt",
+      "rules": "{\"tags\":{\"OR\":[],\"NOT\":[]},\"orgs\":{\"OR\":[],\"NOT\":[]},\"type_attributes\":{\"NOT\":[]},\"type_objects\":{\"NOT\":[]},\"url_params\":\"\"}",
+      "enabled": true,
+      "distribution": "0",
+      "sharing_group_id": "0",
+      "default": false,
+      "source_format": "freetext",
+      "fixed_event": true,
+      "delta_merge": false,
+      "publish": false,
+      "override_ids": false,
+      "settings": "{\"disable_correlation\":\"0\",\"csv\":{\"value\":\"\",\"delimiter\":\"\"},\"common\":{\"excluderegex\":\"\"}}",
+      "input_source": "network",
+      "delete_local_file": false,
+      "lookup_visible": true,
+      "headers": "",
+      "caching_enabled": false,
+      "force_to_ids": false
+    },
+    "Tag": {
+      "name": "osint:source-type=\"block-or-filter-list\"",
+      "colour": "#004f89",
+      "exportable": true,
+      "hide_tag": false
+    }
+  },
+  {
+    "Feed": {
+      "name": "Threatview.io - URL Blocklist",
+      "provider": "threatview.io",
+      "url": "https://threatview.io/Downloads/URL-High-Confidence-Feed.txt",
+      "rules": "{\"tags\":{\"OR\":[],\"NOT\":[]},\"orgs\":{\"OR\":[],\"NOT\":[]},\"type_attributes\":{\"NOT\":[]},\"type_objects\":{\"NOT\":[]},\"url_params\":\"\"}",
+      "enabled": true,
+      "distribution": "0",
+      "sharing_group_id": "0",
+      "default": false,
+      "source_format": "freetext",
+      "fixed_event": true,
+      "delta_merge": true,
+      "publish": false,
+      "override_ids": false,
+      "settings": "{\"disable_correlation\":\"0\",\"csv\":{\"value\":\"\",\"delimiter\":\"\"},\"common\":{\"excluderegex\":\"\"}}",
+      "input_source": "network",
+      "delete_local_file": false,
+      "lookup_visible": true,
+      "headers": "",
+      "caching_enabled": false,
+      "force_to_ids": false
+    },
+    "Tag": {
+      "name": "osint:source-type=\"block-or-filter-list\"",
+      "colour": "#004f89",
+      "exportable": true,
+      "hide_tag": false
+    }
+  },
+  {
+    "Feed": {
+      "name": "Threatview.io - Bitcoin Address Intel",
+      "provider": "threatview.io",
+      "url": "https://threatview.io/Downloads/MALICIOUS-BITCOIN_FEED.txt",
+      "rules": "{\"tags\":{\"OR\":[],\"NOT\":[]},\"orgs\":{\"OR\":[],\"NOT\":[]},\"type_attributes\":{\"NOT\":[]},\"type_objects\":{\"NOT\":[]},\"url_params\":\"\"}",
+      "enabled": true,
+      "distribution": "0",
+      "sharing_group_id": "0",
+      "default": false,
+      "source_format": "freetext",
+      "fixed_event": true,
+      "delta_merge": false,
+      "publish": false,
+      "override_ids": false,
+      "settings": "{\"disable_correlation\":\"0\",\"csv\":{\"value\":\"\",\"delimiter\":\"\"},\"common\":{\"excluderegex\":\"\"}}",
+      "input_source": "network",
+      "delete_local_file": false,
+      "lookup_visible": true,
+      "headers": "",
+      "caching_enabled": false,
+      "force_to_ids": false
+    },
+    "Tag": {
+      "name": "osint:source-type=\"block-or-filter-list\"",
+      "colour": "#004f89",
+      "exportable": true,
+      "hide_tag": false
+    }
+  },
+  {
+    "Feed": {
+      "name": "Threatview.io - SHA File Hash Blocklist",
+      "provider": "threatview.io",
+      "url": "https://threatview.io/Downloads/SHA-HASH-FEED.txt",
+      "rules": "{\"tags\":{\"OR\":[],\"NOT\":[]},\"orgs\":{\"OR\":[],\"NOT\":[]},\"type_attributes\":{\"NOT\":[]},\"type_objects\":{\"NOT\":[]},\"url_params\":\"\"}",
+      "enabled": true,
+      "distribution": "0",
+      "sharing_group_id": "0",
+      "default": false,
+      "source_format": "freetext",
+      "fixed_event": true,
+      "delta_merge": false,
+      "publish": false,
+      "override_ids": false,
+      "settings": "{\"disable_correlation\":\"0\",\"csv\":{\"value\":\"\",\"delimiter\":\"\"},\"common\":{\"excluderegex\":\"\"}}",
+      "input_source": "network",
+      "delete_local_file": false,
+      "lookup_visible": true,
+      "headers": "",
+      "caching_enabled": false,
+      "force_to_ids": false
+    },
+    "Tag": {
+      "name": "osint:source-type=\"block-or-filter-list\"",
+      "colour": "#004f89",
+      "exportable": true,
+      "hide_tag": false
+    }
+  },
+  {
+    "Feed": {
+      "name": "Rösti - Repackaged Öpen Source Threat Intelligence",
+      "provider": "bin.re",
+      "url": "https://rosti.64617461.xyz/downloads/misp/",
+      "rules": "{\"tags\":{\"OR\":[],\"NOT\":[]},\"orgs\":{\"OR\":[],\"NOT\":[]},\"type_attributes\":{\"NOT\":[]},\"type_objects\":{\"NOT\":[]},\"url_params\":\"\"}",
+      "enabled": true,
+      "distribution": "3",
+      "sharing_group_id": "0",
+      "default": false,
+      "source_format": "misp",
+      "fixed_event": true,
+      "delta_merge": false,
+      "publish": false,
+      "override_ids": false,
+      "settings": "{\"disable_correlation\":\"0\",\"unpublish_event\":\"0\",\"csv\":{\"value\":\"\",\"delimiter\":\"\"},\"common\":{\"excluderegex\":\"\"}}",
+      "input_source": "network",
+      "delete_local_file": false,
+      "lookup_visible": true,
+      "headers": "",
+      "caching_enabled": false,
+      "force_to_ids": false
+    }
+  },
+  {
+    "Feed": {
+      "name": "Phishing.Database - New domains of today",
+      "provider": "Phishing.Database",
+      "url": "https://phish.co.za/latest/phishing-domains-NEW-today.txt",
+      "rules": "{\"tags\":{\"OR\":[],\"NOT\":[]},\"orgs\":{\"OR\":[],\"NOT\":[]},\"type_attributes\":{\"NOT\":[]},\"type_objects\":{\"NOT\":[]},\"url_params\":\"\"}",
+      "enabled": true,
+      "distribution": "3",
+      "sharing_group_id": "0",
+      "default": false,
+      "source_format": "csv",
+      "fixed_event": true,
+      "delta_merge": true,
+      "publish": false,
+      "override_ids": false,
+      "settings": "{\"disable_correlation\":\"0\",\"unpublish_event\":\"0\",\"csv\":{\"value\":\"\",\"delimiter\":\"\"},\"common\":{\"excluderegex\":\"\"}}",
+      "input_source": "network",
+      "delete_local_file": false,
+      "lookup_visible": false,
+      "headers": "",
+      "caching_enabled": false,
+      "force_to_ids": false
+    }
+  },
+  {
+    "Feed": {
+      "name": "Phishing.Database - New IPs of today",
+      "provider": "Phishing.Database",
+      "url": "https://phish.co.za/latest/phishing-IPs-NEW-today.txt",
+      "rules": "{\"tags\":{\"OR\":[],\"NOT\":[]},\"orgs\":{\"OR\":[],\"NOT\":[]},\"type_attributes\":{\"NOT\":[]},\"type_objects\":{\"NOT\":[]},\"url_params\":\"\"}",
+      "enabled": true,
+      "distribution": "3",
+      "sharing_group_id": "0",
+      "default": false,
+      "source_format": "csv",
+      "fixed_event": true,
+      "delta_merge": true,
+      "publish": false,
+      "override_ids": false,
+      "settings": "{\"disable_correlation\":\"0\",\"unpublish_event\":\"0\",\"csv\":{\"value\":\"\",\"delimiter\":\"\"},\"common\":{\"excluderegex\":\"\"}}",
+      "input_source": "network",
+      "delete_local_file": false,
+      "lookup_visible": false,
+      "headers": "",
+      "caching_enabled": false,
+      "force_to_ids": false
+    }
+  },
+  {
+    "Feed": {
+      "name": "Phishing.Database - New URLs of today",
+      "provider": "Phishing.Database",
+      "url": "https://phish.co.za/latest/phishing-links-NEW-today.txt",
+      "rules": "{\"tags\":{\"OR\":[],\"NOT\":[]},\"orgs\":{\"OR\":[],\"NOT\":[]},\"type_attributes\":{\"NOT\":[]},\"type_objects\":{\"NOT\":[]},\"url_params\":\"\"}",
+      "enabled": true,
+      "distribution": "3",
+      "sharing_group_id": "0",
+      "default": false,
+      "source_format": "csv",
+      "fixed_event": true,
+      "delta_merge": true,
+      "publish": false,
+      "override_ids": false,
+      "settings": "{\"disable_correlation\":\"0\",\"unpublish_event\":\"0\",\"csv\":{\"value\":\"\",\"delimiter\":\"\"},\"common\":{\"excluderegex\":\"\"}}",
+      "input_source": "network",
+      "delete_local_file": false,
+      "lookup_visible": false,
+      "headers": "",
+      "caching_enabled": false,
+      "force_to_ids": false
+    }
+  },  
+  {
+    "Feed": {
+      "name": "SERPRO: Reputation IP Feed",
+      "provider": "SERPRO",
+      "url": "https://s3.i02.estaleiro.serpro.gov.br/blocklist/blocklist.txt",
+      "rules": "{\"tags\":{\"OR\":[],\"NOT\":[]},\"orgs\":{\"OR\":[],\"NOT\":[]}}",
+      "enabled": true,
+      "distribution": "3",
+      "default": false,
+      "source_format": "freetext",
+      "fixed_event": true,
+      "delta_merge": true,
+      "publish": true,
+      "override_ids": false,
+      "settings": "{\"csv\":{\"value\":\"\",\"delimiter\":\"\"},\"common\":{\"defaultType\":\"ip-src\",\"excluderegex\":\"\"}}",
+      "input_source": "network",
+      "delete_local_file": false,
+      "lookup_visible": false
+    },
+    "Tag": {
+      "name": "osint:source-type=\"block-or-filter-list\"",
+      "colour": "#004f89",
+      "exportable": true,
+      "hide_tag": false
+    }
+  }
 ]

@@ -72,8 +72,6 @@ class GalaxyClusterRelationsController extends AppController
             $this->paginate['contain'] = array('SharingGroup', 'SourceCluster' => ['Org', 'Orgc'], 'TargetCluster', 'GalaxyClusterRelationTag' => array('Tag'));
             $relations = $this->paginate();
             $relations = $this->GalaxyClusterRelation->removeNonAccessibleTargetCluster($this->Auth->user(), $relations);
-            $this->loadModel('SharingGroup');
-            $sgs = $this->SharingGroup->fetchAllAuthorised($this->Auth->user());
             $this->loadModel('Attribute');
             $distributionLevels = $this->Attribute->distributionLevels;
             unset($distributionLevels[5]);
@@ -133,7 +131,15 @@ class GalaxyClusterRelationsController extends AppController
             if (isset($clusterSource['authorized']) && !$clusterSource['authorized']) {
                 $errors = array($clusterSource['error']);
             }
-            
+
+            // Distribution 4 = sharing group: the user must have access to the SG to scope a
+            // relation to it. editRelation() already enforces this via checkIfAuthorised; the
+            // add path (saveRelation) did not, letting a galaxy editor assign a relation to a
+            // sharing group they cannot access (scope-FK injection).
+            if (empty($errors) && $relation['GalaxyClusterRelation']['distribution'] == 4 && !$this->SharingGroup->checkIfAuthorised($this->Auth->user(), $relation['GalaxyClusterRelation']['sharing_group_id'])) {
+                $errors[] = __('Galaxy Cluster Relation could not be saved: The user has to have access to the sharing group in order to be able to use it.');
+            }
+
             if (!empty($relation['GalaxyClusterRelation']['tags'])) {
                 $tags = explode(',', $relation['GalaxyClusterRelation']['tags']);
                 $tags = array_map('trim', $tags);
@@ -141,21 +147,21 @@ class GalaxyClusterRelationsController extends AppController
             } else {
                 $relation['GalaxyClusterRelation' ]['tags'] = array();
             }
-            
+
             if (empty($errors)) {
-                $errors = $this->GalaxyClusterRelation->saveRelation($this->Auth->user(), $clusterSource['SourceCluster'], $relation);
+                $errors = $this->GalaxyClusterRelation->saveRelation($this->Auth->user(), $clusterSource['GalaxyCluster'], $relation);
             }
-            
+
             if (empty($errors)) {
                 $message = __('Relationship added.');
-                $this->GalaxyClusterRelation->SourceCluster->touchTimestamp($clusterSource['SourceCluster']['id']);
-                $this->GalaxyClusterRelation->SourceCluster->unpublish($clusterSource['SourceCluster']['id']);
+                $this->GalaxyClusterRelation->SourceCluster->touchTimestamp($clusterSource['GalaxyCluster']['id']);
+                $this->GalaxyClusterRelation->SourceCluster->unpublish($clusterSource['GalaxyCluster']['id']);
             } else {
                 $message = __('Relationship could not be added.');
             }
             if ($this->_isRest()) {
                 if (empty($errors)) {
-                    return $this->RestResponse->saveSuccessResponse('GalaxyClusterRelation', 'add', $this->response->type(), $message);
+                    return $this->RestResponse->saveSuccessResponse('GalaxyClusterRelation', 'add', $this->GalaxyClusterRelation->id, $this->response->type(), $message);
                 } else {
                     $message .= sprintf('Reasons: %s', json_encode(array_merge($errors, $this->GalaxyClusterRelation->validationErrors)));
                     return $this->RestResponse->saveFailResponse('GalaxyClusterRelation', 'add', $message, $this->response->type());
@@ -219,6 +225,13 @@ class GalaxyClusterRelationsController extends AppController
             }
             $relation = $this->request->data;
             $relation['GalaxyClusterRelation']['id'] = $id;
+            // Pin the source cluster to the stored relation's source. Both the authorisation
+            // check below and editRelation() derive the saved galaxy_cluster_id from this uuid;
+            // reading it from the request body let a user who could merely VIEW a relation
+            // re-parent it onto a cluster they own (cross-cluster relation hijack), because edit
+            // authorised the body-supplied source cluster, not the relation's actual one.
+            // delete() already authorises against the stored source uuid - match it here.
+            $relation['GalaxyClusterRelation']['galaxy_cluster_uuid'] = $existingRelation['GalaxyClusterRelation']['galaxy_cluster_uuid'];
             if ($relation['GalaxyClusterRelation']['distribution'] != 4) {
                 $relation['GalaxyClusterRelation']['sharing_group_id'] = null;
             }
@@ -226,8 +239,12 @@ class GalaxyClusterRelationsController extends AppController
             $clusterSource = $this->GalaxyClusterRelation->SourceCluster->fetchIfAuthorized($this->Auth->user(), $relation['GalaxyClusterRelation']['galaxy_cluster_uuid'], array('edit', 'publish'), $throwErrors=false, $full=false);
             if (isset($clusterSource['authorized']) && !$clusterSource['authorized']) {
                 $errors = array($clusterSource['error']);
+            } else {
+                // Only present on success; reading it when the auth check failed (now reachable
+                // since the source uuid is pinned to the stored, possibly un-owned, cluster)
+                // would dereference a missing key.
+                $relation['GalaxyClusterRelation']['galaxy_cluster_id'] = $clusterSource['GalaxyCluster']['id'];
             }
-            $relation['GalaxyClusterRelation']['galaxy_cluster_id'] = $clusterSource['SourceCluster']['id'];
 
             if (!empty($relation['GalaxyClusterRelation']['tags'])) {
                 $tags = explode(',', $relation['GalaxyClusterRelation']['tags']);
@@ -242,15 +259,15 @@ class GalaxyClusterRelationsController extends AppController
             }
 
             if (empty($errors)) {
-                $message = __('Relationship added.');
-                $this->GalaxyClusterRelation->SourceCluster->touchTimestamp($clusterSource['SourceCluster']['id']);
-                $this->GalaxyClusterRelation->SourceCluster->unpublish($clusterSource['SourceCluster']['id']);
+                $message = __('Relationship changed.');
+                $this->GalaxyClusterRelation->SourceCluster->touchTimestamp($clusterSource['GalaxyCluster']['id']);
+                $this->GalaxyClusterRelation->SourceCluster->unpublish($clusterSource['GalaxyCluster']['id']);
             } else {
-                $message = __('Relationship could not be added.');
+                $message = __('Relationship could not be changed.');
             }
             if ($this->_isRest()) {
                 if (empty($errors)) {
-                    return $this->RestResponse->saveSuccessResponse('GalaxyClusterRelation', 'edit', $this->response->type(), $message);
+                    return $this->RestResponse->saveSuccessResponse('GalaxyClusterRelation', 'edit', $id, $this->response->type(), $message);
                 } else {
                     return $this->RestResponse->saveFailResponse('GalaxyClusterRelation', 'edit', false, $message, $this->response->type());
                 }
@@ -287,8 +304,8 @@ class GalaxyClusterRelationsController extends AppController
             $clusterSource = $this->GalaxyClusterRelation->SourceCluster->fetchIfAuthorized($this->Auth->user(), $relation['GalaxyClusterRelation']['galaxy_cluster_uuid'], array('edit', 'publish'), $throwErrors=true, $full=false);
             $result = $this->GalaxyClusterRelation->delete($id, true);
             if ($result) {
-                $this->GalaxyClusterRelation->SourceCluster->touchTimestamp($clusterSource['SourceCluster']['id']);
-                $this->GalaxyClusterRelation->SourceCluster->unpublish($clusterSource['SourceCluster']['id']);
+                $this->GalaxyClusterRelation->SourceCluster->touchTimestamp($clusterSource['GalaxyCluster']['id']);
+                $this->GalaxyClusterRelation->SourceCluster->unpublish($clusterSource['GalaxyCluster']['id']);
                 $message = __('Galaxy cluster relationship successfuly deleted.');
                 if ($this->_isRest()) {
                     return $this->RestResponse->saveSuccessResponse('GalaxyClusterRelation', 'delete', $id, $this->response->type());

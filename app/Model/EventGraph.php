@@ -1,5 +1,6 @@
 <?php
 App::uses('AppModel', 'Model');
+
 class EventGraph extends AppModel
 {
     public $useTable = 'event_graph';
@@ -27,30 +28,23 @@ class EventGraph extends AppModel
         )
     );
 
-
     public $validate = array(
         'network_json' => array(
-            'rule' => array('isValidJson'),
+            'rule' => 'valueIsJson',
             'message' => 'The provided eventGraph is not a valid json format',
             'required' => true,
+        ),
+        'preview_img' => array(
+            'rule' => array('custom', '/^data:image\/png;base64,[A-Za-z0-9+\/]*={0,2}$/'),
+            'message' => 'The preview has to be a base64 encoded PNG data URL',
+            'allowEmpty' => true,
         ),
     );
 
     public function beforeValidate($options = array())
     {
         parent::beforeValidate();
-        $date = new DateTime();
-        $this->data['EventGraph']['timestamp'] = $date->getTimestamp();
-        return true;
-    }
-
-    public function isValidJson($fields)
-    {
-        $text = $fields['network_json'];
-        $check = json_decode($text);
-        if ($check === null) {
-            return false;
-        }
+        $this->data['EventGraph']['timestamp'] = time();
         return true;
     }
 

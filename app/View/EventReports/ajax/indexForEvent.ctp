@@ -1,6 +1,9 @@
 <div id="eventReportQuickIndex">
     <?php if ($extendedEvent): ?>
-        <div class="alert alert-info"><?= __('Viewing reports in extended event view') ?></div>
+        <div class="alert alert-info"><?= __('Viewing reports in extended mode event view') ?></div>
+    <?php endif; ?>
+    <?php if ($extendingEvent): ?>
+        <div class="alert alert-info"><?= __('Viewing reports in extending mode event view') ?></div>
     <?php endif; ?>
     <?php
         echo $this->element('/genericElements/IndexTable/index_table', array(
@@ -13,29 +16,29 @@
                             'type' => 'simple',
                             'children' => array(
                                 array(
-                                    'onClick' => 'openGenericModal',
-                                    'onClickParams' => [$baseurl . '/eventReports/add/' . h($event_id)],
+                                    'url' => $baseurl . '/eventReports/add/' . h($event_id),
                                     'active' => true,
                                     'text' => __('Add Event Report'),
                                     'fa-icon' => 'plus',
+                                    'class' => 'modal-open',
                                     'requirement' => $canModify,
                                 ),
                                 array(
-                                    'onClick' => 'openGenericModal',
-                                    'onClickParams' => [$baseurl . '/eventReports/importReportFromUrl/' . h($event_id)],
+                                    'url' => $baseurl . '/eventReports/importReportFromUrl/' . h($event_id),
                                     'active' => true,
                                     'text' => __('Import from URL'),
                                     'title' => __('Content for this URL will be downloaded and converted to Markdown'),
                                     'fa-icon' => 'link',
-                                    'requirement' => $canModify && $importModuleEnabled,
+                                    'class' => 'modal-open',
+                                    'requirement' => $canModify && $importModuleEnabled && $unsafeUrlSettingEnabled,
                                 ),
                                 array(
-                                    'onClick' => 'openGenericModal',
-                                    'onClickParams' => [$baseurl . '/eventReports/reportFromEvent/' . h($event_id)],
+                                    'url' => $baseurl . '/eventReports/reportFromEvent/' . h($event_id),
                                     'active' => true,
                                     'text' => __('Generate report from Event'),
                                     'title' => __('Based on filters, create a report summarizing the event'),
                                     'fa-icon' => 'list-alt',
+                                    'class' => 'modal-open',
                                     'requirement' => $canModify,
                                 ),
                             )
@@ -74,17 +77,41 @@
                         'data_path' => 'EventReport.id',
                     ),
                     array(
+                        'name' => __('Context'),
+                        'sort' => 'uuid',
+                        'class' => 'short',
+                        'data_path' => 'EventReport.uuid',
+                        'notes_data_path' => 'Note',
+                        'opinions_data_path' => 'Opinion',
+                        'relationships_data_path' => 'Relationship',
+                        'relationships_inbound_data_path' => 'RelationshipInbound',
+                        'element' => 'shortUUIDWithNotes',
+                        'object_type' => 'EventReport',
+                    ),
+                    array(
                         'name' => __('Name'),
                         'class' => 'useCursorPointer',
                         'data_path' => 'EventReport.name',
                     ),
                     array(
                         'name' => __('Event ID'),
-                        'requirement' => $extendedEvent,
+                        'requirement' => $extendedEvent || $extendingEvent,
                         'class' => 'short',
                         'element' => 'links',
                         'data_path' => 'EventReport.event_id',
                         'url' => $baseurl . '/events/view/%s'
+                    ),
+                    array(
+                        'name' => __('Tags'),
+                        'class' => 'short',
+                        'data_path' => 'EventReportTag',
+                        'element' => 'tags',
+                        'elementParams' => array(
+                            'searchScope' => 'taxonomy',
+                        ),
+                        'scope' => 'event_report',
+                        'addButtonOnly' => true,
+                        'id_data_path' => 'EventReport.id',
                     ),
                     array(
                         'name' => __('Last update'),
@@ -114,18 +141,9 @@
                         'icon' => 'trash',
                         'onclick' => 'simplePopup(\'' . $baseurl . '/event_reports/delete/[onclick_params_data_path]\');',
                         'onclick_params_data_path' => 'EventReport.id',
-                        'complex_requirement' => array(
-                            'function' => function ($row, $options) {
-                                return ($options['me']['Role']['perm_site_admin'] || $options['me']['org_id'] == $options['datapath']['orgc']) && !$options['datapath']['deleted'];
-                            },
-                            'options' => array(
-                                'me' => $me,
-                                'datapath' => array(
-                                    'orgc' => 'EventReport.orgc_id',
-                                    'deleted' => 'EventReport.deleted'
-                                )
-                            )
-                        ),
+                        'complex_requirement' =>  function (array $row) use ($canModify) {
+                            return $canModify && !$row['EventReport']['deleted'];
+                        },
                     ),
                     array(
                         'title' => __('Restore report'),
@@ -134,25 +152,15 @@
                         'icon' => 'trash-restore',
                         'postLink' => true,
                         'postLinkConfirm' => __('Are you sure you want to restore the Report?'),
-                        'complex_requirement' => array(
-                            'function' => function ($row, $options) {
-                                return ($options['me']['Role']['perm_site_admin'] || $options['me']['org_id'] == $options['datapath']['orgc']) && $options['datapath']['deleted'];
-                            },
-                            'options' => array(
-                                'me' => $me,
-                                'datapath' => array(
-                                    'orgc' => 'EventReport.orgc_id',
-                                    'deleted' => 'EventReport.deleted'
-                                )
-                            )
-                        ),
+                        'complex_requirement' => function (array $row) use ($canModify) {
+                            return $canModify && $row['EventReport']['deleted'];
+                        }
                     ),
                 )
             )
         ));
     ?>
 </div>
-
 <script>
     var loadingSpanAnimation = '<span id="loadingSpan" class="fa fa-spin fa-spinner" style="margin-left: 5px;"></span>';
     $(function() {

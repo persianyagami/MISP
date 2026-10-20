@@ -1,5 +1,9 @@
 <?php
 App::uses('AppModel', 'Model');
+
+/**
+ * @property User $User
+ */
 class UserSetting extends AppModel
 {
     public $useTable = 'user_settings';
@@ -16,18 +20,15 @@ class UserSetting extends AppModel
     );
 
     public $validate = array(
-        'json' => array(
-            'isValidJson' => array(
-                'rule' => array('isValidJson'),
-            )
-        )
+        'value' => 'valueIsJson',
     );
 
     public $belongsTo = array(
         'User'
     );
 
-    public $validSettings = array(
+    // private
+    const VALID_SETTINGS = array(
         'publish_alert_filter' => array(
             'placeholder' => array(
                 'AND' => array(
@@ -67,7 +68,8 @@ class UserSetting extends AppModel
             )
         ),
         'homepage' => array(
-            'path' => '/events/index'
+            'placeholder' => ['path' => '/events/index'],
+            'validation' => 'validate_homepage',
         ),
         'default_restsearch_parameters' => array(
             'placeholder' => array(
@@ -96,12 +98,63 @@ class UserSetting extends AppModel
         'event_index_hide_columns' => [
             'placeholder' => ['clusters'],
         ],
+        'oidc' => [ // Data saved by OIDC plugin
+            'internal' => true,
+        ],
+        'periodic_notification_filters' => [
+            'placeholder' => [
+                'orgc_id' => '1',
+                'distribution' => '1',
+                'sharing_group_id' => '1',
+                'event_info' => 'phishing',
+                'tags' => '["tlp:red"]',
+            ],
+        ],
     );
+
+    public static function validate_homepage($value, $user)
+    {
+        // If it's already an array, use it. Otherwise, decode the string.
+        $path = is_string($value) ? json_decode($value, true) : $value;
+
+        if (!is_array($path) || empty($path['path']) || !is_string($path['path'])) {
+            return false;
+        }
+        // A leading '/' is not enough: '//attacker.example' also starts with
+        // one and is a protocol-relative, off-site URL once it reaches a
+        // Location header. Share the check with the other post-login
+        // navigation target (pre_login_requested_url) instead of keeping a
+        // second, weaker variant of it here.
+        App::uses('InternalRedirectValidator', 'Tools');
+        return InternalRedirectValidator::sanitize($path['path']) !== '';
+    }
+
+    /**
+     * The user's homepage as a safe, same-origin path.
+     *
+     * Revalidated on read, not merely on write: the rows this reads may
+     * predate the store-time check above, and setSettingInternal() writes
+     * without running any validator at all. Every consumer of the homepage
+     * setting - the post-login redirect, the news page's "continue" link
+     * and the menu logo - goes through here, so one guard covers all of
+     * them and there is nothing left to sweep in the database.
+     *
+     * @param int $userId
+     * @return string The path to navigate to, or '' when unset or unsafe.
+     */
+    public function getHomepagePath($userId)
+    {
+        $homepage = $this->getValueForUser($userId, 'homepage');
+        if (!is_array($homepage) || empty($homepage['path']) || !is_string($homepage['path'])) {
+            return '';
+        }
+        App::uses('InternalRedirectValidator', 'Tools');
+        return InternalRedirectValidator::sanitize($homepage['path']);
+    }
 
     // massage the data before we send it off for validation before saving anything
     public function beforeValidate($options = array())
     {
-        parent::beforeValidate();
         // add a timestamp if it is not set
         if (empty($this->data['UserSetting']['timestamp'])) {
             $this->data['UserSetting']['timestamp'] = time();
@@ -124,50 +177,126 @@ class UserSetting extends AppModel
     public function afterFind($results, $primary = false)
     {
         foreach ($results as $k => $v) {
-            $results[$k]['UserSetting']['value'] = json_decode($v['UserSetting']['value'], true);
+            if (isset($v['UserSetting']['value'])) {
+                $results[$k]['UserSetting']['value'] = json_decode($v['UserSetting']['value'], true);
+            }
         }
         return $results;
     }
 
+    /**
+     * @param string $setting
+     * @return bool
+     */
     public function checkSettingValidity($setting)
     {
-        return isset($this->validSettings[$setting]);
+        return isset(self::VALID_SETTINGS[$setting]);
     }
 
-    public function checkSettingAccess($user, $setting)
+    /**
+     * @param string $setting
+     * @return bool
+     */
+    public function isInternal($setting)
     {
-        if (!empty($this->validSettings[$setting]['restricted'])) {
-            $role_check = $this->validSettings[$setting]['restricted'];
-            if (!is_array($role_check)) {
-                $role_check = array($role_check);
+        if (!isset(self::VALID_SETTINGS[$setting]['internal'])) {
+            return false;
+        }
+        return self::VALID_SETTINGS[$setting]['internal'];
+    }
+
+    /**
+     * @param array $user
+     * @return array
+     */
+    public function settingPlaceholders(array $user)
+    {
+        $output = [];
+        foreach (self::VALID_SETTINGS as $setting => $config) {
+            if ($this->checkSettingAccess($user, $setting) === true) {
+                $output[$setting] = $config['placeholder'];
             }
-            $userHasValidRole = false;
-            foreach ($role_check as $role) {
+        }
+        return $output;
+    }
+
+    public function getInternalSettingNames()
+    {
+        $internal = [];
+        foreach (self::VALID_SETTINGS as $setting => $config) {
+            if (isset($config['internal']) && $config['internal']) {
+                $internal[] = $setting;
+            }
+        }
+        return $internal;
+    }
+
+    /**
+     * @param array $user
+     * @param string $setting
+     * @return bool|string
+     */
+    public function checkSettingAccess(array $user, $setting)
+    {
+        if ($this->isInternal($setting)) {
+            return 'site_admin';
+        }
+        if (!empty(self::VALID_SETTINGS[$setting]['restricted'])) {
+            $roleCheck = self::VALID_SETTINGS[$setting]['restricted'];
+            if (!is_array($roleCheck)) {
+                $roleCheck = array($roleCheck);
+            }
+            foreach ($roleCheck as $role) {
                 if (!empty($user['Role'][$role])) {
                     return true;
                 }
             }
-            if (!$userHasValidRole) {
-                foreach ($role_check as &$role) {
-                    $role = substr($role, 5);
-                }
-                return implode(', ', $role_check);
+            foreach ($roleCheck as &$role) {
+                $role = substr($role, 5);
             }
+            return implode(', ', $roleCheck);
         }
         return true;
     }
 
-    /*
+    /**
+     * @param array $user
+     * @param string $setting
+     * @return bool|string
+     */
+    public function checkSettingValidation(array $user, $setting, $value)
+    {
+        if (!isset(self::VALID_SETTINGS[$setting]['validation'])) {
+            return true;
+        }
+
+        $funName = self::VALID_SETTINGS[$setting]['validation'];
+        $validationFn = ['UserSetting', $funName];
+        if (!empty($funName) && is_callable($validationFn)) {
+            $check = call_user_func($validationFn, $value, $user);
+            return $check;
+        }
+        return true;
+    }
+
+    /**
      * canModify expects an auth user object or a user ID and a loaded setting as input parameters
      * check if the user can modify/remove the given entry
      * returns true for site admins
      * returns true for org admins if setting["User"]["org_id"] === $user["org_id"]
      * returns true for any user if setting["user_id"] === $user["id"]
+     * @param array|int $user Current user
+     * @param array $setting
+     * @param int $user_id
+     * @return bool
      */
-     public function checkAccess($user, $setting, $user_id = false)
+     public function checkAccess($user, array $setting, $user_id = false)
      {
          if (is_numeric($user)) {
              $user = $this->User->getAuthUser($user);
+         }
+         if ($this->isInternal($setting['UserSetting']['setting']) && !$user['Role']['perm_site_admin']) {
+             return false;
          }
          if (empty($setting) && !empty($user_id) && is_numeric($user_id)) {
              $userToCheck = $this->User->find('first', array(
@@ -189,13 +318,18 @@ class UserSetting extends AppModel
          if ($user['Role']['perm_site_admin']) {
              return true;
          } else if ($user['Role']['perm_admin']) {
-             if ($user['org_id'] === $setting['User']['org_id']) {
+             // An org admin may not manage a site admin's setting, even when the
+             // site admin belongs to the same organisation.
+             if (
+                 $user['org_id'] === $setting['User']['org_id'] &&
+                 !$this->User->isUserSiteAdmin($setting['UserSetting']['user_id'])
+             ) {
                  return true;
              }
          } else {
              if (
                  $user['id'] === $setting['UserSetting']['user_id'] &&
-                 (!Configure::check('MISP.disableUserSelfManagement') || Configure::check('MISP.disableUserSelfManagement'))
+                 (empty(Configure::read('MISP.disableUserSelfManagement')))
              ) {
                  return true;
              }
@@ -203,7 +337,7 @@ class UserSetting extends AppModel
          return false;
      }
 
-     public function getDefaulRestSearchParameters($user)
+     public function getDefaultRestSearchParameters($user)
      {
          return $this->getValueForUser($user['id'], 'default_restsearch_parameters') ?: [];
      }
@@ -236,8 +370,8 @@ class UserSetting extends AppModel
 
     /**
      * Check whether the event is something the user is interested (to be alerted on)
-     * @param $user
-     * @param $event
+     * @param array $user
+     * @param array $event
      * @return bool
      */
     public function checkPublishFilter(array $user, array $event)
@@ -295,7 +429,7 @@ class UserSetting extends AppModel
         }
     }
 
-    /*
+    /**
      * Checks if an event matches the given rule
      * valid filters:
      * - AttributeTag.name
@@ -307,6 +441,11 @@ class UserSetting extends AppModel
      * Values passed can be used for direct string comparisons or alternatively
      * as substring matches by encapsulating the string in a pair of "%" characters
      * Each rule can take a list of values
+     *
+     * @param string $rule
+     * @param array|string $lookup_values
+     * @param array $event
+     * @return bool
      */
     private function __checkEvent($rule, $lookup_values, $event)
     {
@@ -341,7 +480,7 @@ class UserSetting extends AppModel
                 $extracted_value = mb_strtolower($extracted_value);
                 foreach ($lookup_values as $lookup_value) {
                     $lookup_value_trimmed = trim($lookup_value, "%");
-                    if (strlen($lookup_value_trimmed) != strlen($lookup_value)) {
+                    if (strlen($lookup_value_trimmed) !== strlen($lookup_value)) {
                         if (strpos($extracted_value, $lookup_value_trimmed) !== false) {
                             return true;
                         }
@@ -356,26 +495,45 @@ class UserSetting extends AppModel
         return false;
     }
 
-    public function setSetting($user, &$data)
+    /**
+     * @param array $user
+     * @param array $data
+     * @return bool
+     * @throws Exception
+     */
+    public function setSetting(array $user, array $data)
     {
         $userSetting = array();
+        if (empty($user['Role']['perm_admin']) && !empty(Configure::read('MISP.disableUserSelfManagement'))) {
+            throw new MethodNotAllowedException(__('User self-management is disabled on this instance.'));
+        }
         if (!empty($data['UserSetting']['user_id']) && is_numeric($data['UserSetting']['user_id'])) {
+            $targetUserId = $data['UserSetting']['user_id'];
             $user_to_edit = $this->User->find('first', array(
                 'recursive' => -1,
-                'conditions' => array('User.id' => $data['UserSetting']['user_id']),
+                'conditions' => array('User.id' => $targetUserId),
                 'fields' => array('User.org_id')
             ));
-            if (
+            // A user may always edit their own settings. A site admin may edit
+            // anyone's. An org admin may edit non-site-admin users within their
+            // own org. Anything else is an explicit authorisation failure rather
+            // than a silent fall-through to the acting user's own settings.
+            $authorised =
+                ($targetUserId == $user['id']) ||
                 !empty($user['Role']['perm_site_admin']) ||
-                (!empty($user['Role']['perm_admin']) && ($user_to_edit['User']['org_id'] == $user['org_id']))
-            ) {
-                $userSetting['user_id'] = $data['UserSetting']['user_id'];
+                (!empty($user['Role']['perm_admin'])
+                    && !empty($user_to_edit)
+                    && ($user_to_edit['User']['org_id'] == $user['org_id'])
+                    && !$this->User->isUserSiteAdmin($targetUserId));
+            if (!$authorised) {
+                throw new MethodNotAllowedException(__('You are not authorised to edit the settings of this user.'));
             }
+            $userSetting['user_id'] = $targetUserId;
         }
         if (empty($userSetting['user_id'])) {
             $userSetting['user_id'] = $user['id'];
         }
-        if (empty($data['UserSetting']['setting']) || !isset($data['UserSetting']['setting'])) {
+        if (empty($data['UserSetting']['setting'])) {
             throw new MethodNotAllowedException(__('This endpoint expects both a setting and a value to be set.'));
         }
         if (!$this->checkSettingValidity($data['UserSetting']['setting'])) {
@@ -385,27 +543,52 @@ class UserSetting extends AppModel
         if ($settingPermCheck !== true) {
             throw new MethodNotAllowedException(__('This setting is restricted and requires the following permission(s): %s', $settingPermCheck));
         }
+        $settingValidationCheck = $this->checkSettingValidation($user, $data['UserSetting']['setting'], $data['UserSetting']['value']);
+        if ($settingValidationCheck !== true) {
+            throw new MethodNotAllowedException(__('Invalid setting value', $settingValidationCheck));
+        }
         $userSetting['setting'] = $data['UserSetting']['setting'];
         if ($data['UserSetting']['value'] !== '') {
             $userSetting['value'] = $data['UserSetting']['value'];
         } else {
             $userSetting['value'] = '';
         }
-        $existingSetting = $this->find('first', array(
+
+        return $this->setSettingInternal($userSetting['user_id'], $userSetting['setting'], $userSetting['value']);
+    }
+
+    /**
+     * Set user setting without checking permission.
+     * @param int $userId
+     * @param string $setting
+     * @param mixed $value
+     * @return array|bool|mixed|null
+     * @throws Exception
+     */
+    public function setSettingInternal($userId, $setting, $value)
+    {
+        $userSetting = [
+            'user_id' => $userId,
+            'setting' => $setting,
+            'value' => $value,
+        ];
+
+        $existingSetting = $this->find('first', [
             'recursive' => -1,
-            'conditions' => array(
-                'UserSetting.user_id' => $userSetting['user_id'],
-                'UserSetting.setting' => $userSetting['setting']
-            )
-        ));
+            'conditions' => [
+                'UserSetting.user_id' => $userId,
+                'UserSetting.setting' => $setting,
+            ],
+            'fields' =>  ['UserSetting.id'],
+            'callbacks' => false,
+        ]);
         if (empty($existingSetting)) {
             $this->create();
         } else {
             $userSetting['id'] = $existingSetting['UserSetting']['id'];
         }
-        // save the setting
-        $result = $this->save(array('UserSetting' => $userSetting));
-        return true;
+
+        return $this->save($userSetting, ['skipAuditLog' => $this->isInternal($setting)]);
     }
 
     /**

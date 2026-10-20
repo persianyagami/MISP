@@ -5,7 +5,7 @@ It is **very strongly recommended** to upgrade MISP via the web interface. This 
 
 # Point release updates
 !!! notice
-    In general, updating MISP between point releases (for exampe 2.4.50 -> 2.4.53) happens with one of the following two options (both are to be executed as root).
+    In general, updating MISP between point releases (for example 2.4.50 -> 2.4.53) happens with one of the following two options (both are to be executed as root).
 
 ## Option 1
 
@@ -81,7 +81,7 @@ cd /var/www/MISP/PyMISP
 python3 setup.py install
 ```
 
-# 6. For RHEL/CentOS: enable python3 for php-fpm
+# 6. For RHEL: enable python3 for php-fpm
 ```bash
 echo 'source scl_source enable rh-python36' >> /etc/opt/rh/rh-php71/sysconfig/php-fpm
 sed -i.org -e 's/^;\(clear_env = no\)/\1/' /etc/opt/rh/rh-php71/php-fpm.d/www.conf

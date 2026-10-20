@@ -12,7 +12,7 @@ $fullTitle = [
         'main' => __('All organisations'),
         'extra' => __(' having a presence on this instance'),
     ]
-    ];
+];
 
 echo '<div class="index">';
 echo $this->element('/genericElements/IndexTable/index_table', [
@@ -91,16 +91,19 @@ echo $this->element('/genericElements/IndexTable/index_table', [
             ],
             [
                 'name' => __('Nationality'),
+                'sort' => 'Organisation.nationality',
                 'data_path' => 'Organisation',
                 'class' => 'short',
                 'element' => 'country',
             ],
             [
                 'name' => __('Sector'),
+                'sort' => 'Organisation.sector',
                 'data_path' => 'Organisation.sector',
             ],
             [
                 'name' => __('Type'),
+                'sort' => 'Organisation.type',
                 'data_path' => 'Organisation.type',
             ],
             [
@@ -111,7 +114,7 @@ echo $this->element('/genericElements/IndexTable/index_table', [
                 'name' => __('Added by'),
                 'sort' => 'created_by_email',
                 'data_path' => 'Organisation.created_by_email',
-                'requirements' => $isSiteAdmin
+                'requirement' => $isSiteAdmin
             ],
             [
                 'name' => __('Local'),
@@ -129,7 +132,7 @@ echo $this->element('/genericElements/IndexTable/index_table', [
                 'name' => __('Restrictions'),
                 'sort' => 'restricted_to_domain',
                 'data_path' => 'Organisation.restricted_to_domain',
-                'array_implode_glue' => '<br/>',
+                'array_implode_glue' => '<br>',
             ],
         ],
         'actions' => [
@@ -149,7 +152,7 @@ echo $this->element('/genericElements/IndexTable/index_table', [
                 ],
                 'icon' => 'edit',
                 'title' => __('Edit'),
-                'requirements' => $isSiteAdmin
+                'requirement' => $isSiteAdmin
             ],
             [
                 'title' => __('Delete'),
@@ -158,7 +161,7 @@ echo $this->element('/genericElements/IndexTable/index_table', [
                 'url_params_data_paths' => array('Organisation.id'),
                 'postLink' => true,
                 'postLinkConfirm' => __('Are you sure you want to delete the Organisation?'),
-                'requirements' => $isSiteAdmin
+                'requirement' => $isSiteAdmin
             ],
         ]
     ]

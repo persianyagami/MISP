@@ -1,4 +1,9 @@
 <?php
+echo $this->element('genericElements/assetLoader', [
+    'js' => ['doT', 'moment.min'],
+    'css' => ['analyst-data',],
+]);
+
 $extendedFromHtml = '';
 if (!empty($cluster['GalaxyCluster']['extended_from'])) {
     $element = $this->element('genericElements/IndexTable/Fields/links', array(
@@ -40,24 +45,38 @@ $description = $this->Markdown->cleanup($cluster['GalaxyCluster']['description']
 $table_data = array();
 $table_data[] = array('key' => __('Cluster ID'), 'value' => $cluster['GalaxyCluster']['id']);
 $table_data[] = array('key' => __('Name'), 'value' => $cluster['GalaxyCluster']['value']);
-$table_data[] = array('key' => __('Parent Galaxy'), 'value' => $cluster['GalaxyCluster']['Galaxy']['name'] ? $cluster['GalaxyCluster']['Galaxy']['name'] : $cluster['GalaxyCluster']['Galaxy']['type']);
+$table_data[] = array('key' => __('Parent Galaxy'), 'value' => $cluster['GalaxyCluster']['Galaxy']['name'] ?: $cluster['GalaxyCluster']['Galaxy']['type']);
 $table_data[] = array('key' => __('Description'), 'value' => $description, 'value_class' => 'md');
 if (!$cluster['GalaxyCluster']['default']) {
     $table_data[] = [
         'key' => __('Published'),
         'boolean' => $cluster['GalaxyCluster']['published'],
-        'class' => !$cluster['GalaxyCluster']['published'] ? 'background-red bold' : ''
     ];
 }
 $table_data[] = array('key' => __('Default'), 'boolean' => $cluster['GalaxyCluster']['default'], 'class' => 'black');
 $table_data[] = array('key' => __('Version'), 'value' => $cluster['GalaxyCluster']['version']);
-$table_data[] = array('key' => __('UUID'), 'value' => $cluster['GalaxyCluster']['uuid'], 'value_class' => 'quickSelect');
+$table_data[] = [
+    'key' => __('UUID'),
+    'element' => 'genericElements/SingleViews/Fields/uuidField',
+    'element_params' => [
+        'data' => $cluster,
+        'field' => [
+            'path' => 'GalaxyCluster.uuid',
+            'object_type' => 'GalaxyCluster',
+            'notes_path' => 'GalaxyCluster.Note',
+            'opinions_path' => 'GalaxyCluster.Opinion',
+            'relationships_path' => 'GalaxyCluster.Relationship',
+            'relationshipsInbound_path' => 'GalaxyCluster.RelationshipInbound',
+        ]
+    ],
+];
 $table_data[] = array('key' => __('Collection UUID'), 'value' => $cluster['GalaxyCluster']['collection_uuid'], 'value_class' => 'quickSelect');
+$clusterSource = $cluster['GalaxyCluster']['source'];
 $table_data[] = array(
     'key' => __('Source'),
-    'html' => filter_var($cluster['GalaxyCluster']['source'], FILTER_VALIDATE_URL) ?
-        '<a href="' . $cluster['GalaxyCluster']['source'] . '" rel="noreferrer noopener">' . h($cluster['GalaxyCluster']['source']) :
-        h($cluster['GalaxyCluster']['source']),
+    'html' => filter_var($clusterSource, FILTER_VALIDATE_URL) && preg_match('/^https?:\/\//i', $clusterSource) ?
+        '<a href="' . h($clusterSource) . '" rel="noreferrer noopener">' . h($clusterSource) . '</a>' :
+        h($clusterSource),
 );
 $table_data[] = array('key' => __('Authors'), 'value' => !empty($cluster['GalaxyCluster']['authors']) ? implode(', ', $cluster['GalaxyCluster']['authors']) : __('N/A'));
 $table_data[] = array('key' => __('Distribution'), 'element' => 'genericElements/IndexTable/Fields/distribution_levels', 'element_params' => array(
@@ -80,6 +99,13 @@ $table_data[] = array('key' => __('Events'), 'html' => isset($cluster['GalaxyClu
                     ):
                     '<span>0</span>'
                 );
+$table_data[] = array('key' => __('Attributes'), 'html' => isset($cluster['GalaxyCluster']['tag_att_count']) ?
+                    sprintf('<a href="%s">%s</a>',
+                        sprintf('%s/attributes/index?tags=%s', $baseurl, h($cluster['GalaxyCluster']['tag_id'])),
+                        __n('%s attribute', '%s attributes', $cluster['GalaxyCluster']['tag_att_count'], h($cluster['GalaxyCluster']['tag_att_count']))
+                    ):
+                    '<span>0</span>'
+);
 if (!empty($extendedFromHtml)) {
     $table_data[] = array('key' => __('Forked From'), 'html' => $extendedFromHtml);
 }
@@ -95,6 +121,9 @@ if (!empty($extendedByHtml)) {
             </h2>
             <?php echo $this->element('genericElements/viewMetaTable', array('table_data' => $table_data)); ?>
         </div>
+        <div class="span4">
+            <div id="analyst_data_thread" class="panel-container"></div>
+        </div>
     </div>
     <div class="row-fuild">
         <div id="matrix_container"></div>
@@ -105,7 +134,7 @@ if (!empty($extendedByHtml)) {
     <?php
         if (!empty(Configure::read('Plugin.CyCat_enable'))) {
             $titleHTML = __('CyCat Relationships');
-            $titleHTML .= sprintf('<a href="%s" onclick="event.stopPropagation()" title="%s" target="_blank"><img src="%s" style="height: 2.5em"/></a>',
+            $titleHTML .= sprintf('<a href="%s" onclick="event.stopPropagation()" title="%s" target="_blank"><img src="%s" style="height: 2.5em"></a>',
                 'https://cycat.org/',
                 __('CyCAT or the CYbersecurity Resource CATalogue aims at mapping and documenting, in a single formalism and catalogue all the available cybersecurity tools, rules, playbooks, processes and controls.'),
                 $baseurl . '/img/CyCat.ico'
@@ -119,13 +148,14 @@ if (!empty($extendedByHtml)) {
     ?>
     <div id="elements_content"></div>
 </div>
-<?= $this->element('genericElements/assetLoader', array(
-    'js' => array(
+<?= $this->element('genericElements/assetLoader', [
+    'js' => [
         'markdown-it',
-    ),
-));
+        'jquery-ui.min',
+    ],
+]);
 ?>
-<script type="text/javascript">
+<script>
 $(function () {
     $.get("<?= $baseurl ?>/galaxy_elements/index/<?php echo $cluster['GalaxyCluster']['id']; ?>", function(data) {
         $("#elements_content").html(data);
@@ -143,4 +173,64 @@ md.disable(['image'])
 var $md = $('.md');
 $md.html(md.render($md.text()));
 </script>
-<?= $this->element('/genericElements/SideMenu/side_menu', array('menuList' => 'galaxies', 'menuItem' => 'view_cluster'));
+<?= $this->element('/genericElements/SideMenu/side_menu', array('menuList' => 'galaxies', 'menuItem' => 'view_cluster')); ?>
+
+<?php
+
+$object_uuid = $cluster['GalaxyCluster']['uuid'];
+
+$notes = $cluster['GalaxyCluster']['Note'] ?? [];
+$opinions = $cluster['GalaxyCluster']['Opinion'] ?? [];
+$relationships_outbound = $cluster['GalaxyCluster']['Relationship'] ?? [];
+$relationships_inbound = $cluster['GalaxyCluster']['RelationshipInbound'] ?? [];
+$notesOpinions = array_merge($notes, $opinions);
+if(!function_exists("countNotes")) {
+    function countNotes($notesOpinions) {
+        $notesTotalCount = count($notesOpinions);
+        $notesCount = 0;
+        $relationsCount = 0;
+        foreach ($notesOpinions as $notesOpinion) {
+            if ($notesOpinion['note_type'] == 2) { // relationship
+                $relationsCount += 1;
+            } else {
+                $notesCount += 1;
+            }
+            if (!empty($notesOpinion['Note'])) {
+                $nestedCounts = countNotes($notesOpinion['Note']);
+                $notesTotalCount += $nestedCounts['total'];
+                $notesCount += $nestedCounts['notesOpinions'];
+                $relationsCount += $nestedCounts['relations'];
+            }
+            if (!empty($notesOpinion['Opinion'])) {
+                $nestedCounts = countNotes($notesOpinion['Opinion']);
+                $notesTotalCount += $nestedCounts['total'];
+                $notesCount += $nestedCounts['notesOpinions'];
+                $relationsCount += $nestedCounts['relations'];
+            }
+        }
+        return ['total' => $notesTotalCount, 'notesOpinions' => $notesCount, 'relations' => $relationsCount];
+    }
+}
+$counts = countNotes($notesOpinions);
+$notesOpinionCount = $counts['notesOpinions'];
+$allCounts = [
+    'notesOpinions' => $counts['notesOpinions'],
+    'relationships_outbound' => count($relationships_outbound),
+    'relationships_inbound' => count($relationships_inbound),
+];
+
+$options = [
+    'container_id' => 'analyst_data_thread',
+    'object_type' => 'GalaxyCluster',
+    'object_uuid' => $object_uuid,
+    'shortDist' => $shortDist,
+    'notes' => $notes,
+    'opinions' => $opinions,
+    'relationships_outbound' => $relationships_outbound,
+    'relationships_inbound' => $relationships_inbound,
+    'allCounts' => $allCounts,
+];
+
+echo $this->element('genericElements/Analyst_data/thread', $options);
+
+?>

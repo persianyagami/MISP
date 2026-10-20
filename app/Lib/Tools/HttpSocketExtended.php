@@ -18,10 +18,15 @@ class HttpSocketHttpException extends Exception
     {
         $this->response = $response;
         $this->url = $url;
+
         $message = "Remote server returns HTTP error code $response->code";
         if ($url) {
             $message .= " for URL $url";
         }
+        if ($response->body) {
+            $message .= ': ' . substr(ltrim($response->body), 0, 100);
+        }
+
         parent::__construct($message, (int)$response->code);
     }
 
@@ -66,6 +71,14 @@ class HttpSocketJsonException extends Exception
 class HttpSocketResponseExtended extends HttpSocketResponse
 {
     /**
+     * @return bool
+     */
+    public function isNotModified()
+    {
+        return $this->code == 304;
+    }
+
+    /**
      * @param string $message
      * @throws SocketException
      */
@@ -101,19 +114,15 @@ class HttpSocketResponseExtended extends HttpSocketResponse
      */
     public function json()
     {
+        if (strlen($this->body) === 0) {
+            throw new HttpSocketJsonException('Could not parse empty response as JSON.', $this);
+        }
+
         try {
-            if (defined('JSON_THROW_ON_ERROR')) {
-                // JSON_THROW_ON_ERROR is supported since PHP 7.3
-                $decoded = json_decode($this->body, true, 512, JSON_THROW_ON_ERROR);
-            } else {
-                $decoded = json_decode($this->body, true);
-                if ($decoded === null) {
-                    throw new UnexpectedValueException('Could not parse JSON: ' . json_last_error_msg(), json_last_error());
-                }
-            }
-            return $decoded;
+            return JsonTool::decode($this->body);
         } catch (Exception $e) {
-            throw new HttpSocketJsonException('Could not parse response as JSON.', $this, $e);
+            $contentType = $this->getHeader('content-type');
+            throw new HttpSocketJsonException("Could not parse HTTP response as JSON. Received Content-Type $contentType.", $this, $e);
         }
     }
 }
@@ -128,6 +137,9 @@ class HttpSocketExtended extends HttpSocket
 {
     public $responseClass = 'HttpSocketResponseExtended';
 
+    /** @var callable */
+    private $onConnect;
+
     public function __construct($config = array())
     {
         parent::__construct($config);
@@ -137,6 +149,37 @@ class HttpSocketExtended extends HttpSocket
                 $this->config['request']['header']['Accept-Encoding'] = implode(', ', $this->acceptedEncodings());
             }
         }
+    }
+
+    public function connect()
+    {
+        $connected = parent::connect();
+        if ($this->onConnect) {
+            $handler = $this->onConnect;
+            $handler($this);
+        }
+        return $connected;
+    }
+
+    /**
+     * Set callback method, that will be called after connection to remote server is established.
+     * @param callable $callback
+     * @return void
+     */
+    public function onConnectHandler(callable $callback)
+    {
+        $this->onConnect = $callback;
+    }
+
+    /**
+     * @return array|null
+     */
+    public function getMetaData()
+    {
+        if ($this->connection) {
+            return stream_get_meta_data($this->connection);
+        }
+        return null;
     }
 
     /**

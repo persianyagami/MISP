@@ -193,12 +193,16 @@ $(document).ready( function() {
   		}
   	)
   	.append("xhtml:div")
-  	.html(function (d) {
-  		var result = 'fa-' + d.imgClass;
-        var namespace = getFontAwesomeNamespace(d.imgClass);
+  	.append("xhtml:i")
+  	.attr("class", function (d) {
+  		// imgClass is a galaxy's icon field: keep it to an icon name and set it
+  		// as an attribute, never as markup
+  		var icon = String(d.imgClass).replace(/[^a-z0-9-]/g, '');
+  		var result = 'fa-' + icon;
+  		var namespace = getFontAwesomeNamespace(icon);
   		if (d.type == 'galaxy' || d.type == 'tag') result = 'fa-2x ' + result;
 
-  		return '<i class="' + namespace + ' ' + result + '"></i>';
+  		return namespace + ' ' + result;
   	});
 
   	nodeEnter.append("text")
@@ -478,7 +482,7 @@ $(document).ready( function() {
   	return false;
   }
 
-  $(document).on('keydown', function(e) {
+  $("#chart").on('keydown', function(e) {
   	if (e.which == 69) {
   		if (highlighted == undefined) {
   			showPane(root['nodes'][0], 'selected');
@@ -522,7 +526,7 @@ $(document).ready( function() {
   });
   */
 
-  $(document).on('keydown', function(e) {
+  $("#chart").on('keydown', function(e) {
   	if (e.which == 88) {
   		e.preventDefault();
   		if (e.ctrlKey) {

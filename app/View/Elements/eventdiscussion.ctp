@@ -43,7 +43,7 @@
                             <td class="discussionBoxTD discussionBoxTDMid discussionBoxTDMidLeft">
                                 <?php
                                 if (isset($post['org_id'])) {
-                                    echo $this->OrgImg->getOrgLogo(['id' => $post['org_id'], 'name' => $post['org_name'], 'uuid' => $post['org_uuid']], 48);
+                                    echo $this->OrgImg->getOrgLogo(['id' => h($post['org_id']), 'name' => h($post['org_name']), 'uuid' => h($post['org_uuid'])], 48);
                                 } else {
                                     echo __('Deactivated user');
                                 }
@@ -127,9 +127,10 @@
         </div>
     <?php endif; ?>
     <div class="comment">
+    <?php if ($this->Acl->canAccess('posts', 'add')): ?>
     <?php
-        if (isset($currentEvent)) $url = $baseurl . '/posts/add/event/' . $currentEvent;
-        else $url = $baseurl . '/posts/add/thread/' . $thread['Thread']['id'];
+        if (isset($currentEvent)) $url = $baseurl . '/posts/add/event/' . h($currentEvent);
+        else $url = $baseurl . '/posts/add/thread/' . h($thread['Thread']['id']);
         echo $this->Form->create('Post', array('url' => $url));
     ?>
         <fieldset>
@@ -149,10 +150,11 @@
             ));
         ?>
         </fieldset>
-        <button class="btn btn-primary" onclick="submitMessageForm('<?php echo $url;?>', 'PostViewForm', 'top'); return false;"><?php echo __('Send comment');?></button>
+        <button class="btn btn-primary" onclick="submitMessageForm('<?php echo h($url);?>'); return false;"><?php echo __('Send comment');?></button>
     <?php
         echo $this->Form->end();
     ?>
+    <?php endif; ?>
     </div>
 </div>
 <script type="text/javascript">

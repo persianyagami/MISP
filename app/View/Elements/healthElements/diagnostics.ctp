@@ -1,32 +1,61 @@
+<?php
+$humanReadableFilesize = function ($bytes, $dec = 2) {
+    $size = ['B', 'kB', 'MB', 'GB', 'TB', 'PB', 'EB', 'ZB', 'YB'];
+    $factor = floor((strlen($bytes) - 1) / 3);
+    return sprintf("%.{$dec}f&nbsp;%s", ($bytes / (1024 ** $factor)), $size[$factor]);
+};
+?>
 <div style="border:1px solid #dddddd; margin-top:1px; width:95%; padding:10px">
     <?php if (!$dbEncodingStatus):?>
-    <div style="font-size:12pt;padding-left:3px;width:100%;background-color:red;color:white;font-weight:bold;"><?= __('Incorrect database encoding setting: Your database connection is currently NOT set to UTF-8. Please make sure to uncomment the \'encoding\' => \'utf8\' line in ') . APP; ?>Config/database.php</div>
+    <div style="font-size:12pt;padding-left:3px;width:100%;background-color:red;color:white;font-weight:bold;">
+        <?= __('Incorrect database encoding setting: Your database connection is currently NOT set to UTF-8. Please make sure to uncomment the \'encoding\' => \'utf8\' line in ') . APP; ?>Config/database.php
+    </div>
     <?php endif; ?>
     <h3><?= __('MISP version');?></h3>
-    <p><?= __('Every version of MISP includes a JSON file with the current version. This is checked against the latest tag on GitHub, if there is a version mismatch the tool will warn you about it. Make sure that you update MISP regularly.');?></p>
+    <p><?php
+        echo __('Every version of MISP includes a JSON file with the current version.') . " ";
+        if (Configure::read('MISP.online_version_check') || !Configure::check('MISP.online_version_check')) {
+            echo __('This is checked against the latest tag on GitHub, if there is a version mismatch the tool will warn you about it.') . " ";
+        } else {
+            echo "<b>" . __('The online version check is disabled, so you will not be warned about an outdated MISP version.') . "</b> ";
+        }
+        echo __('Make sure that you update MISP regularly.');
+    ?></p>
     <div class="diagnostics-box" style="width:100%">
+        <?php
+            if (!empty($version['new_major'])) {
+                echo '<span class="bold">' . __('A new major MISP release is available') . '</span>... <span class="blue bold">' . h($version['new_major']) . '</span> <span>Keep in mind that major versions require manual intervention, check out the <a href="https://github.com/MISP/MISP/releases/tag/v2.5.0">release</a>\'s instructions.</span><br />';
+            } else if (!empty($version['new_minor'])) {
+                echo '<span class="bold">' . __('A new major MISP release is available') . '</span>... <span class="blue bold">' . h($version['new_minor']) . '</span> <span>Keep in mind that major versions require manual intervention, check out the <a href="https://github.com/MISP/MISP/releases/tag/v2.5.0">release</a>\'s instructions.</span><br />';
+            }
+        ?>
         <span><?= __('Currently installed version…');?>
             <?php
                 $upToDate = isset($version['upToDate']) ? $version['upToDate'] : null;
                 switch ($upToDate) {
                     case 'newer':
-                        $fontColour = 'orange';
+                        $colourClass = 'orange';
                         $versionText = __('Upcoming development version');
                         break;
                     case 'older':
-                        $fontColour = 'red';
+                        $colourClass = 'red';
                         $versionText = __('Outdated version');
                         break;
                     case 'same':
-                        $fontColour = 'green';
+                        $colourClass = 'green';
                         $versionText = __('OK');
                         break;
+                    case 'disabled':
+                        $colourClass = 'bold';
+                        $versionText = __('Online version checks are disabled');
+                    break;
+                    case 'error':
                     default:
-                        $fontColour = 'red';
+                        $colourClass = 'red';
                         $versionText = __('Could not retrieve version from GitHub');
                 }
             ?>
-            <span style="color:<?php echo $fontColour; ?>;">
+            <span class="<?= $colourClass; ?>">
                 <?= (isset($version['current']) ? $version['current'] : __('Unknown')) . ' (' . ($commit ? h($commit) : __('Unknown')) . ')';
                 ?>
                 <?php if ($commit === ''): ?>
@@ -38,25 +67,45 @@
             </span>
         </span><br>
         <span><?php echo __('Latest available version…');?>
-            <span style="color:<?php echo $fontColour; ?>;">
-                <?= (isset($version['newest']) ? $version['newest'] : __('Unknown')) . ' (' . ($latestCommit ? $latestCommit : __('Unknown')) . ')' ?>
+            <span class="<?= $colourClass; ?>">
+                <?php
+                if (!Configure::read('MISP.online_version_check') && Configure::check('MISP.online_version_check')) {
+                    echo __('Online version checks are disabled');
+                } else {
+                    echo (isset($version['newest']) ? $version['newest'] : __('Unknown')) . ' (' . ($latestCommit ? $latestCommit : __('Unknown')) . ')';
+                }
+                ?>
             </span>
         </span><br>
         <span><?php echo __('Status…');?>
-            <span style="color:<?= $fontColour; ?>;"><?= $versionText ?></span>
+            <span class="<?= $colourClass; ?>"><?= $versionText ?></span>
         </span><br>
         <span><?php echo __('Current branch…');?>
             <?php
-                $branchColour = $branch == '2.4' ? 'green' : 'red bold';
+                $branchColour = $branch == '2.4' ? 'green' : (!Configure::read('MISP.self_update') && Configure::check('MISP.self_update')) ? 'bold' : 'red bold';
             ?>
             <span class="<?php echo h($branchColour); ?>">
-                <?= $branch == '2.4' ? h($branch) : __('You are not on a branch, Update MISP will fail'); ?>
+                <?php
+                  if ($branch == '2.4') {
+                      h($branch);
+                  } elseif (!Configure::read('MISP.self_update') && Configure::check('MISP.self_update')) {
+                      echo __('You are not on a branch, but since MISP self-update is disabled this is expected.');
+                  } else {
+                      echo __('You are not on a branch, Update MISP will fail');
+                  }
+                ?>
             </span>
         </span><br>
         <pre class="hidden green bold" id="gitResult"></pre>
+
+    </div>
+
+    <h3><?php echo __('Update MISP');?></h3>
+    <?php if (Configure::read('MISP.self_update') || !Configure::check('MISP.self_update')): ?>
+    <p>
         <button title="<?php echo __('Pull the latest MISP version from GitHub');?>" class="btn btn-inverse" style="padding-top:1px;padding-bottom:1px;" onClick = "updateMISP();"><?php echo __('Update MISP');?></button>
         <a title="<?php echo __('Click the following button to go to the update progress page. This page lists all updates that are currently queued and executed.'); ?>" style="margin-left: 5px;" href="<?php echo $baseurl; ?>/servers/updateProgress/"><i class="fas fa-tasks"></i> <?php echo __('View Update Progress');?></a>
-    </div>
+    </p>
     <h3><?php echo __('Submodules version');?>
         <it id="refreshSubmoduleStatus" class="fas fa-sync useCursorPointer" style="font-size: small; margin-left: 5px;" title="<?php echo __('Refresh submodules version.'); ?>"></it>
     </h3>
@@ -64,6 +113,9 @@
     <span id="updateAllJson" class="btn btn-inverse" title="<?php echo __('Load all JSON into the database.'); ?>">
         <it class="fas fa-file-upload"></it> <?php echo __("Load JSON into database"); ?>
     </span>
+    <?php else: ?>
+      You are using a MISP installation method that does not support or recommend using the MISP self-update, such as a Docker container. Please update using the appropriate update mechanism.
+    <?php endif; ?>
 
     <h3><?php echo __('Writeable Directories and files');?></h3>
     <p><?php echo __('The following directories and files have to be writeable for MISP to function properly. Make sure that the apache user has write privileges for the directories below.');?></p>
@@ -191,7 +243,7 @@
             if ($phpSetting['value'] < $phpSetting['recommended']) $pass = false;
             else $pass = true;
     ?>
-    <span style="color:<?php echo $pass ? 'green': 'orange'; ?>"><?php echo $pass ? __('OK') : __('Low'); ?> (recommended: <?php echo strval($phpSetting['recommended']) . ($phpSetting['unit'] ? ' ' . $phpSetting['unit'] : '') . ')'; ?></span><br>
+    <span style="color:<?php echo $pass ? 'green': 'orange'; ?>"><?php echo $pass ? __('OK') : __('Low'); ?> (recommended: <?php echo $phpSetting['recommended'] . ($phpSetting['unit'] ? ' ' . $phpSetting['unit'] : '') . ')'; ?></span><br>
     <?php
         endforeach;
     ?>
@@ -226,6 +278,40 @@
                 }
             ?></td>
             <?php endforeach; ?>
+        </tr>
+        <?php endforeach; ?>
+        </tbody>
+    </table>
+
+    <h4><?= __('PHP Dependencies') ?></h4>
+    <p><?= __("Dependencies located in the Vendor folder. You can use composer to install them: 'php composer.phar help' ") ?></p>
+    <table class="table table-condensed table-bordered" style="width: 40vw">
+        <thead>
+            <tr>
+                <th><?= __('Dependency') ?></th>
+                <th><?= __('Required') ?></th>
+                <th><?= __('Why to install') ?></th>
+                <th><?= __('Installed') ?></th>
+            </tr>
+        </thead>
+        <tbody>
+        <?php foreach ($extensions['dependencies'] as $dependency => $info): ?>
+        <tr>
+            <td class="bold"><?= h($dependency) ?></td>
+            <td><?= $info['required'] ? '<i class="black fa fa-check" role="img" aria-label="' .  __('Yes') . '"></i>' : '<i class="black fa fa-times" role="img" aria-label="' .  __('No') . '"></i>' ?></td>
+            <td><?= $info['info'] ?></td>
+            <td><?php
+                $version = $info["version"];
+                $outdated = $info["version_outdated"];
+                if ($version && !$outdated) {
+                    echo '<i class="green fa fa-check" role="img" aria-label="' .  __('Yes') . '"></i> (' . h($version) .')';
+                } else {
+                    echo '<i class="red fa fa-times" role="img" aria-label="' .  __('No') . '"></i>';
+                    if ($outdated) {
+                        echo '<br>' . __("Version %s installed, but required at least %s", h($version), h($info['required_version']));
+                    }
+                }
+            ?></td>
         </tr>
         <?php endforeach; ?>
         </tbody>
@@ -281,39 +367,59 @@
         )); ?>
     </div>
 
+    <?php if (!empty($dbConfiguration)): ?>
+    <?= $this->element('/healthElements/db_config_diagnostic', array(
+        'dbConfiguration' => $dbConfiguration
+    )); ?>
+    <?php endif; ?>
+
     <h3><?= __("Redis info") ?></h3>
     <div class="diagnostics-box">
         <b><?= __('PHP extension version') ?>:</b> <?= $redisInfo['extensionVersion'] ?: ('<span class="red bold">' . __('Not installed.') . '</span>') ?><br>
         <?php if ($redisInfo['connection']): ?>
-        <b><?= __('Redis version') ?>:</b> <?= $redisInfo['redis_version'] ?><br>
-        <b><?= __('Memory allocator') ?>:</b> <?= $redisInfo['mem_allocator'] ?><br>
-        <b><?= __('Memory usage') ?>:</b> <?= $redisInfo['used_memory_human'] ?>B<br>
-        <b><?= __('Peak memory usage') ?>:</b> <?= $redisInfo['used_memory_peak_human'] ?>B<br>
-        <b><?= __('Fragmentation ratio') ?>:</b> <?= $redisInfo['mem_fragmentation_ratio'] ?><br>
-        <b><?= __('Total system memory') ?>:</b> <?= $redisInfo['total_system_memory_human'] ?>B
+        <b><?= __('Redis version') ?>:</b> <?= h($redisInfo['redis_version']) ?><br>
+        <?php if (isset($redisInfo['dfly_version']) || isset($redisInfo['dragonfly_version'])): ?>
+        <b><?= __('Dragonfly version') ?>:</b> <?= h($redisInfo['dfly_version'] ?? $redisInfo['dragonfly_version']) ?><br>
+        <?php endif; ?>
+        <?php if (isset($redisInfo['mem_allocator'])): ?>
+        <b><?= __('Memory allocator') ?>:</b> <?= h($redisInfo['mem_allocator']) ?><br>
+        <?php endif; ?>
+        <b><?= __('Memory usage') ?>:</b> <?= $humanReadableFilesize($redisInfo['used_memory']) ?><br>
+        <?php if (isset($redisInfo['used_memory_peak'])): ?>
+        <b><?= __('Peak memory usage') ?>:</b> <?= $humanReadableFilesize($redisInfo['used_memory_peak']) ?><br>
+        <?php endif; ?>
+        <?php if (isset($redisInfo['mem_fragmentation_ratio'])): ?>
+        <b><?= __('Fragmentation ratio') ?>:</b> <?= h($redisInfo['mem_fragmentation_ratio']) ?><br>
+        <?php endif; ?>
+        <?php if (isset($redisInfo['maxmemory'])): ?>
+        <b><?= __('Maximum memory') ?>:</b> <?= $humanReadableFilesize($redisInfo['maxmemory']) ?><br>
+        <?php endif; ?>
+        <?php if (isset($redisInfo['total_system_memory'])): ?>
+        <b><?= __('Total system memory') ?>:</b> <?= $humanReadableFilesize($redisInfo['total_system_memory']) ?>
+        <?php endif; ?>
         <?php elseif ($redisInfo['extensionVersion']): ?>
         <span class="red bold">Redis is not available. <?= $redisInfo['connection_error'] ?></span>
         <?php endif; ?>
     </div>
 
     <h3><?php echo __('Advanced attachment handler');?></h3>
-        <?php echo __('The advanced attachment tools are used by the add attachment functionality to extract additional data about the uploaded sample.');?>
-        <div class="diagnostics-box">
-            <?php
-                if (empty($advanced_attachments)):
-            ?>
-                    <b><?php echo __('PyMISP');?></b>:… <span class="red bold"><?php echo __('Not installed or version outdated.');?></span><br />
-            <?php
-                endif;
-                if (!empty($advanced_attachments)):
-                    foreach ($advanced_attachments as $k => $v):
-            ?>
-                        <b><?php echo h($k); ?></b>:… <?php echo $v === false ? '<span class="green bold">' . __('OK') . '</span>' : '<span class="red bold">' . h($v) . '</span>'; ?><br />
-            <?php
-                    endforeach;
-                endif;
-            ?>
-        </div>
+    <?php echo __('The advanced attachment tools are used by the add attachment functionality to extract additional data about the uploaded sample.');?>
+    <div class="diagnostics-box">
+        <?php
+            if (empty($advanced_attachments)):
+        ?>
+                <b><?php echo __('PyMISP');?></b>:… <span class="red bold"><?php echo __('Not installed or version outdated.');?></span><br>
+        <?php
+            endif;
+            if (!empty($advanced_attachments)):
+                foreach ($advanced_attachments as $k => $v):
+        ?>
+                    <b><?php echo h($k); ?></b>:… <?php echo $v === false ? '<span class="green bold">' . __('OK') . '</span>' : '<span class="red bold">' . h($v) . '</span>'; ?><br>
+        <?php
+                endforeach;
+            endif;
+        ?>
+    </div>
 
     <h3><?= __('Attachment scan module') ?></h3>
     <div class="diagnostics-box">
@@ -326,16 +432,18 @@
         <?php endif; ?>
     </div>
 
-    <h3><?= __('STIX and Cybox libraries');?></h3>
-    <p><?= __('Mitre\'s STIX and Cybox python libraries have to be installed in order for MISP\'s STIX export to work. Make sure that you install them (as described in the MISP installation instructions) if you receive an error below.');?><br />
-    <?= __('If you run into any issues here, make sure that both STIX and CyBox are installed as described in the INSTALL.txt file.');?><br>
+    <h3><?= __('STIX libraries');?></h3>
+    <p><?= __('Mitre\'s STIX and Cybox python libraries have to be installed in order for MISP\'s STIX 1 export to work. For STIX 2, make sure both stix2 and misp-stix libraries installed');?><br />
+    <?= __('If you run into any issues here, make sure to check how libraries are installed in the INSTALL.txt file.');?><br>
 
     <?php if ($stix['operational'] === -1): ?>
         <b class="red"><?= __('Could not run test script (stixtest.py). Please check error logs for more details.') ?></b>
     <?php else: ?>
 
     <b><?= __('Current libraries status') ?>:</b>
-    <?php if ($stix['operational'] === 0): ?>
+    <?php if ($stix['test_run'] === false): ?>
+    <b class="red bold"><?= __('Failed to run STIX diagnostics tool.') ?></b>
+    <?php elseif ($stix['operational'] === 0): ?>
     <b class="red bold"><?= __('Some of the libraries related to STIX are not installed. Make sure that all libraries listed below are correctly installed.') ?></b>
     <?php elseif ($stix['invalid_version']): ?>
     <span class="orange"><?= __('Some versions should be updated.') ?></span>
@@ -369,10 +477,14 @@
     <div class="diagnostics-box">
         <?php
             $colour = 'green';
-            $message = __('OK');
-            if ($yaraStatus['operational'] == 0) {
+            if ($yaraStatus['test_run'] === false) {
+                $colour = 'red';
+                $message = __('Failed to run yara diagnostics tool.');
+            }elseif ($yaraStatus['operational'] == 0) {
                 $colour = 'red';
                 $message = __('Invalid plyara version / plyara not installed. Please run pip3 install plyara');
+            }else{
+                $message = __('OK');
             }
             echo __('plyara library installed') . '…<span style="color:' . $colour . ';">' . $message . '</span>';
         ?>
@@ -439,24 +551,21 @@
     ?>
     </div>
 
-    <h3><?php echo __('Session table');?></h3>
-    <p><?php echo __('This tool checks how large your database\'s session table is. <br />Sessions in CakePHP rely on PHP\'s garbage collection for clean-up and in certain distributions this can be disabled by default resulting in an ever growing cake session table. <br />If you are affected by this, just click the clean session table button below.');?></p>
+    <h3><?php echo __('PHP Sessions');?></h3>
     <div class="diagnostics-box">
-        <?php
-            $colour = 'green';
-            $message = $sessionErrors[$sessionStatus];
-            $sessionColours = array(0 => 'green', 1 => 'red', 2 => 'orange', 3 => 'red');
-            $colour = $sessionColours[$sessionStatus];
-            echo __('Expired sessions') . '…<span style="color:' . $colour . ';">' . $sessionCount . ' (' . $message . ')' . '</span>';
-        ?>
+    <?php
+        $sessionColours = array(0 => 'green', 1 => 'red', 2 => 'orange', 3 => 'red', 9 => 'red');
+        $colour = $sessionColours[$sessionStatus['error_code']];
+        echo sprintf('<p><b>%s:</b> %s</p>', __('Session handler'), $sessionStatus['handler']);
+        echo sprintf('<span style="color:%s;">%s</span>', $colour, __($sessionErrors[$sessionStatus['error_code']]));
+        if($sessionStatus['handler'] === 'database'){
+            echo sprintf('<br><span style="color:%s;">%s: %s</span>',$colour, __('Expired sessions'), $sessionStatus['expired_count']);
+            if ($sessionStatus['error_code'] === 1){
+                echo sprintf('<br><a href="<?php echo $baseurl;?>/servers/purgeSessions"><span class="btn btn-inverse" style="padding-top:1px;padding-bottom:1px;">%s</span></a>', __('Purge sessions'));
+            }
+        }
+    ?>
     </div>
-    <?php
-        if ($sessionStatus < 2):
-    ?>
-    <a href="<?php echo $baseurl;?>/servers/purgeSessions"><span class="btn btn-inverse" style="padding-top:1px;padding-bottom:1px;"><?php echo __('Purge sessions');?></span></a>
-    <?php
-        endif;
-    ?>
     <h3><?php echo __('Upgrade authkeys keys to the advanced keys format'); ?><a id="advanced_authkey_update">&nbsp</a></h3>
     <p>
         <?php
@@ -507,13 +616,13 @@
     <span class="btn btn-inverse" role="button" tabindex="0" aria-label="<?php echo __('Recover deleted events');?>" title="<?php echo __('Recover deleted events');?>" style="padding-top:1px;padding-bottom:1px;" onClick="location.href = '<?php echo $baseurl; ?>/events/restoreDeletedEvents';"><?php echo __('Recover deleted events');?></span>
 </div>
 
+<?php if (Configure::read('MISP.self_update') || !Configure::check('MISP.self_update')): ?>
 <script>
     $(function() {
         updateSubModulesStatus();
         $('#refreshSubmoduleStatus').click(function() { updateSubModulesStatus(); });
         $('#updateAllJson').click(function() { updateAllJson(); });
     });
-
     function updateSubModulesStatus(message, job_sent, sync_result) {
         job_sent = job_sent === undefined ? false : job_sent;
         sync_result = sync_result === undefined ? '' : sync_result;
@@ -540,12 +649,13 @@
     function updateAllJson() {
         $.ajax({
             url: '<?php echo $baseurl . '/servers/updateJSON/'; ?>',
-            type: "get",
+            type: "post",
+            headers: {'X-CSRF-Token': (window.csrfToken || '')},
             beforeSend: function() {
                 $('#submoduleGitResultDiv').show();
                 $('#submoduleGitResult').append('<it class="fa fa-spin fa-spinner" style="font-size: large; left: 50%; top: 50%;"></it>');
             },
-            success: function(data, statusText, xhr) {
+            success: function(data) {
                 Object.keys(data).forEach(function(k) {
                     var val = data[k];
                     data[k] = val ? 'Updated' : 'Update failed';
@@ -558,3 +668,4 @@
         });
     }
 </script>
+<?php endif; ?>

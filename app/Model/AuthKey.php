@@ -1,6 +1,5 @@
 <?php
 App::uses('AppModel', 'Model');
-App::uses('RandomTool', 'Tools');
 App::uses('CidrTool', 'Tools');
 App::uses('BlowfishConstantPasswordHasher', 'Controller/Component/Auth');
 
@@ -14,9 +13,10 @@ class AuthKey extends AppModel
     public $actsAs = array(
         'AuditLog',
         'SysLogLogable.SysLogLogable' => array(
-                'userModel' => 'User',
-                'userKey' => 'user_id',
-                'change' => 'full'),
+            'userModel' => 'User',
+            'userKey' => 'user_id',
+            'change' => 'full'
+        ),
         'Containable',
     );
 
@@ -24,9 +24,20 @@ class AuthKey extends AppModel
         'User'
     );
 
-    public $authkey_raw = false;
+    public $validate = [
+        'uuid' => [
+            'rule' => 'uuid',
+            'message' => 'Please provide a valid RFC 4122 UUID',
+        ],
+        'user_id' => [
+            'rule' => 'userExists',
+            'message' => 'User doesn\'t exists',
+        ],
+        'read_only' => [
+            'rule' => 'boolean',
+        ],
+    ];
 
-    // massage the data before we send it off for validation before saving anything
     public function beforeValidate($options = array())
     {
         if (empty($this->data['AuthKey']['id'])) {
@@ -34,36 +45,43 @@ class AuthKey extends AppModel
                 $this->data['AuthKey']['uuid'] = CakeText::uuid();
             }
             if (empty($this->data['AuthKey']['authkey'])) {
-                $authkey = (new RandomTool())->random_str(true, 40);
+                $authkey = RandomTool::random_str(true, 40);
             } else {
                 $authkey = $this->data['AuthKey']['authkey'];
             }
-            $passwordHasher = $this->getHasher();
-            $this->data['AuthKey']['authkey'] = $passwordHasher->hash($authkey);
+            $this->data['AuthKey']['authkey'] = $this->getHasher()->hash($authkey);
             $this->data['AuthKey']['authkey_start'] = substr($authkey, 0, 4);
             $this->data['AuthKey']['authkey_end'] = substr($authkey, -4);
             $this->data['AuthKey']['authkey_raw'] = $authkey;
-            $this->authkey_raw = $authkey;
         }
 
+        $validAllowedIpFound = false;
         if (!empty($this->data['AuthKey']['allowed_ips'])) {
-            if (is_string($this->data['AuthKey']['allowed_ips'])) {
-                $this->data['AuthKey']['allowed_ips'] = trim($this->data['AuthKey']['allowed_ips']);
-                if (empty($this->data['AuthKey']['allowed_ips'])) {
-                    $this->data['AuthKey']['allowed_ips'] = [];
+            $allowedIps = &$this->data['AuthKey']['allowed_ips'];
+            if (is_string($allowedIps)) {
+                $allowedIps = trim($allowedIps);
+                if (empty($allowedIps)) {
+                    $allowedIps = [];
                 } else {
-                    $this->data['AuthKey']['allowed_ips'] = explode("\n", $this->data['AuthKey']['allowed_ips']);
-                    $this->data['AuthKey']['allowed_ips'] = array_map('trim', $this->data['AuthKey']['allowed_ips']);
+                    // Split by new line char or by comma
+                    $allowedIps = preg_split('/([\n,])/', $allowedIps);
+                    $allowedIps = array_map('trim', $allowedIps);
                 }
             }
-            if (!is_array($this->data['AuthKey']['allowed_ips'])) {
+            if (!is_array($allowedIps)) {
                 $this->invalidate('allowed_ips', 'Allowed IPs must be array');
             }
-            foreach ($this->data['AuthKey']['allowed_ips'] as $cidr) {
+
+            foreach ($allowedIps as $cidr) {
                 if (!CidrTool::validate($cidr)) {
                     $this->invalidate('allowed_ips', "$cidr is not valid IP range");
+                } else {
+                    $validAllowedIpFound = true;
                 }
             }
+        }
+        if (!empty(Configure::read('Security.mandate_ip_allowlist_advanced_authkeys')) && $validAllowedIpFound === false){
+            $this->invalidate('allowed_ips', "Setting an ip allowlist is mandatory on this instance.");
         }
 
         $creationTime = isset($this->data['AuthKey']['created']) ? $this->data['AuthKey']['created'] : time();
@@ -91,8 +109,14 @@ class AuthKey extends AppModel
     {
         foreach ($results as $key => $val) {
             if (isset($val['AuthKey']['allowed_ips'])) {
-                $results[$key]['AuthKey']['allowed_ips'] = $this->jsonDecode($val['AuthKey']['allowed_ips']);
+                $results[$key]['AuthKey']['allowed_ips'] = JsonTool::decode($val['AuthKey']['allowed_ips']);
             }
+            if (isset($val['AuthKey']['unique_ips'])) {
+                $results[$key]['AuthKey']['unique_ips'] = JsonTool::decode($val['AuthKey']['unique_ips']);
+            } else {
+                $results[$key]['AuthKey']['unique_ips'] = [];
+            }
+            
         }
         return $results;
     }
@@ -103,7 +127,14 @@ class AuthKey extends AppModel
             if (empty($this->data['AuthKey']['allowed_ips'])) {
                 $this->data['AuthKey']['allowed_ips'] = null;
             } else {
-                $this->data['AuthKey']['allowed_ips'] = json_encode($this->data['AuthKey']['allowed_ips']);
+                $this->data['AuthKey']['allowed_ips'] = JsonTool::encode($this->data['AuthKey']['allowed_ips']);
+            }
+        }
+        if (isset($this->data['AuthKey']['unique_ips'])) {
+            if (empty($this->data['AuthKey']['unique_ips'])) {
+                $this->data['AuthKey']['unique_ips'] = null;
+            } else {
+                $this->data['AuthKey']['unique_ips'] = JsonTool::encode($this->data['AuthKey']['unique_ips']);
             }
         }
         return true;
@@ -129,27 +160,36 @@ class AuthKey extends AppModel
 
     /**
      * @param string $authkey
+     * @param bool $includeExpired
      * @return array|false
+     * @throws Exception
      */
-    public function getAuthUserByAuthKey($authkey)
+    public function getAuthUserByAuthKey($authkey, $includeExpired = false)
     {
         $start = substr($authkey, 0, 4);
         $end = substr($authkey, -4);
+
+        $conditions = [
+            'authkey_start' => $start,
+            'authkey_end' => $end,
+        ];
+
+        if (!$includeExpired) {
+            $conditions['OR'] = [
+                'expiration >' => time(),
+                'expiration' => 0
+            ];
+        }
+
         $possibleAuthkeys = $this->find('all', [
             'recursive' => -1,
-            'fields' => ['id', 'authkey', 'user_id', 'expiration', 'allowed_ips', 'read_only'],
-            'conditions' => [
-                'OR' => [
-                    'expiration >' => time(),
-                    'expiration' => 0
-                ],
-                'authkey_start' => $start,
-                'authkey_end' => $end,
-            ]
+            'fields' => ['id', 'authkey', 'user_id', 'expiration', 'allowed_ips', 'read_only', 'unique_ips'],
+            'conditions' => $conditions,
         ]);
         $passwordHasher = $this->getHasher();
         foreach ($possibleAuthkeys as $possibleAuthkey) {
             if ($passwordHasher->check($authkey, $possibleAuthkey['AuthKey']['authkey'])) {
+                $this->updateUniqueIp($possibleAuthkey);
                 $user = $this->User->getAuthUser($possibleAuthkey['AuthKey']['user_id']);
                 if ($user) {
                     $user = $this->setUserData($user, $possibleAuthkey);
@@ -158,6 +198,26 @@ class AuthKey extends AppModel
             }
         }
         return false;
+    }
+
+    /**
+     * @param array $authkey
+     * @return void
+     * @throws Exception
+     */
+    private function updateUniqueIp(array $authkey)
+    {
+        if (PHP_SAPI === 'cli' || Configure::read("MISP.disable_seen_ips_authkeys")) {
+            return;
+        }
+
+        $remoteIp = $this->_remoteIp();
+        if ($remoteIp === null || in_array($remoteIp, $authkey['AuthKey']['unique_ips'], true)) {
+            return;
+        }
+
+        $authkey['AuthKey']['unique_ips'][] = $remoteIp;
+        $this->save($authkey, ['fieldList' => ['unique_ips']]);
     }
 
     /**
@@ -173,9 +233,9 @@ class AuthKey extends AppModel
         $user['authkey_read_only'] = (bool)$authkey['AuthKey']['read_only'];
 
         if ($authkey['AuthKey']['read_only']) {
-            // Disable all permissions, keep just `perm_auth` unchanged
+            // Disable all permissions, keep just `perm_auth` and `perm_audit` unchanged
             foreach ($user['Role'] as $key => &$value) {
-                if (substr($key, 0, 5) === 'perm_' && $key !== 'perm_auth') {
+                if (str_starts_with($key, 'perm_') && $key !== 'perm_auth' && $key !== 'perm_audit') {
                     $value = 0;
                 }
             }
@@ -187,10 +247,11 @@ class AuthKey extends AppModel
     /**
      * @param int $userId
      * @param int|null $keyId
+     * @param string|null $authKey
      * @return false|string
      * @throws Exception
      */
-    public function resetAuthKey($userId, $keyId = null)
+    public function resetAuthKey($userId, $keyId = null, $authKey = null)
     {
         $time = time();
 
@@ -211,7 +272,7 @@ class AuthKey extends AppModel
             }
             $comment = __("Created by resetting auth key %s\n%s", $keyId, $currentAuthkey['AuthKey']['comment']);
             $allowedIps = isset($currentAuthkey['AuthKey']['allowed_ips']) ? $currentAuthkey['AuthKey']['allowed_ips'] : [];
-            return $this->createnewkey($userId, $comment, $allowedIps);
+            return $this->createnewkey($userId, $authKey, $comment, $allowedIps);
         } else {
             $existingAuthkeys = $this->find('all', [
                 'recursive' => -1,
@@ -227,21 +288,25 @@ class AuthKey extends AppModel
                 $key['AuthKey']['expiration'] = $time;
                 $this->save($key);
             }
-            return $this->createnewkey($userId);
+            return $this->createnewkey($userId, $authKey);
         }
     }
 
     /**
      * @param int $userId
+     * @param string|null $authKey
      * @param string $comment
      * @param array $allowedIps
      * @return false|string
      * @throws Exception
      */
-    public function createnewkey($userId, $comment = '', array $allowedIps = [])
+    public function createnewkey($userId, $authKey = null, $comment = '', array $allowedIps = [])
     {
+        if(empty($authKey)) {
+            $authKey = (new RandomTool())->random_str(true, 40);
+        }
         $newKey = [
-            'authkey' => (new RandomTool())->random_str(true, 40),
+            'authkey' => $authKey,
             'user_id' => $userId,
             'comment' => $comment,
             'allowed_ips' => empty($allowedIps) ? null : $allowedIps,
@@ -261,7 +326,7 @@ class AuthKey extends AppModel
      */
     public function getKeyUsage($id)
     {
-        $redis = $this->setupRedisWithException();
+        $redis = RedisTool::init();
         $data = $redis->hGetAll("misp:authkey_usage:$id");
 
         $output = [];
@@ -291,7 +356,7 @@ class AuthKey extends AppModel
      */
     public function getLastUsageForKeys(array $ids)
     {
-        $redis = $this->setupRedisWithException();
+        $redis = RedisTool::init();
         $keys = array_map(function($id) {
             return "misp:authkey_last_usage:$id";
         }, $ids);
@@ -328,10 +393,91 @@ class AuthKey extends AppModel
     }
 
     /**
+     * Validation
+     * @param array $check
+     * @return bool
+     */
+    public function userExists(array $check)
+    {
+        return $this->User->hasAny(['id' => $check['user_id']]);
+    }
+
+    /**
+     * Check if given user has valid advanced auth key.
+     * @param int $userId
+     * @return bool
+     */
+    public function userHasAuthKey($userId)
+    {
+        return $this->hasAny([
+            'user_id' => $userId,
+            'OR' => [
+                'expiration >' => time(),
+                'expiration' => 0
+            ],
+        ]);
+    }
+
+    /**
      * @return AbstractPasswordHasher
      */
     private function getHasher()
     {
         return new BlowfishConstantPasswordHasher();
+    }
+
+    public function canCreateAuthKeyForUser($currentUser, $user_id)
+    {
+        if (!empty($currentUser['Role']['perm_site_admin'])) {
+            return true;
+        }
+        if (!empty($currentUser['Role']['perm_admin'])) {
+            // org admin only for non-admin users and themselves
+            $user = $this->User->find('first', [
+                'recursive' => -1,
+                'conditions' => [
+                    'User.id' => $user_id,
+                    'User.disabled' => false,
+                    'User.org_id' => $currentUser['org_id']
+                ],
+                'fields' => ['User.id', 'User.org_id', 'User.disabled'],
+                'contain' => [
+                    'Role' => [
+                        'fields' => [
+                            'Role.perm_site_admin', 'Role.perm_admin', 'Role.perm_auth'
+                        ]
+                    ]
+                ]
+            ]);
+            // Make sure that we can't create keys for disabled users
+            if (empty($user)) {
+                return false;
+            }
+            if ($user['Role']['perm_site_admin'] || 
+                ($user['Role']['perm_admin'] && $user['User']['id'] !== $currentUser['id']) ||
+                !$user['Role']['perm_auth']) {
+                // no create/edit for site_admin or other org admin
+                return false;
+            } else {
+                // ok for themselves or users
+                return true;
+            }
+        } else {
+            // user for themselves
+            return (int)$user_id === (int)$currentUser['id'];
+        }
+    }
+
+    public function canEditAuthKey($currentUser, $key_id)
+    {
+        $user_id = $this->find('column', [
+            'fields' => ['AuthKey.user_id'],
+            'conditions' => [
+                'AuthKey.id' => $key_id
+            ]]);
+        if (!empty($user_id)) {
+            $user_id = $user_id[0];
+        }
+        return $this->canCreateAuthKeyForUser($currentUser, $user_id);
     }
 }

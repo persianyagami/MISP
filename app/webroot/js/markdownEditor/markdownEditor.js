@@ -5,7 +5,7 @@ var renderTimer, scrollTimer, attackMatrixTimer, eventgraphTimer;
 var scrollMap;
 var $splitContainer, $editorContainer, $rawContainer, $viewerContainer, $fullContainer, $resizableHandle, $autocompletionCB, $syncScrollCB, $autoRenderMarkdownCB, $topBar, $lastModifiedField, $markdownDropdownRulesMenu, $markdownDropdownGeneralMenu, $toggleFullScreenMode, $loadingBackdrop
 var $editor, $viewer, $raw
-var $saveMarkdownButton, $mardownViewerToolbar
+var $saveMarkdownButton, $markdownViewerToolbar
 var loadingSpanAnimation = '<span id="loadingSpan" class="fa fa-spin fa-spinner" style="margin-left: 5px;"></span>';
 
 var contentChanged = false
@@ -13,6 +13,20 @@ var defaultMode = 'viewer'
 var currentMode
 var splitEdit = true
 var noEditorScroll = false // Necessary as onscroll cannot be unbound from CM
+
+var markdownDisabledParsingRules = ['link', 'image']
+var markdownEnabledParsingRules = []
+
+if (markdownOverrideEnabledParsingRules && markdownOverrideEnabledParsingRules.length > 0) {
+    markdownOverrideEnabledParsingRules.forEach((rule) => {
+        markdownEnabledParsingRules.push(rule)
+        const ind = markdownDisabledParsingRules.indexOf(rule)
+        if (ind !== -1) {
+            markdownDisabledParsingRules.splice(ind, 1);
+        }
+    })
+}
+
 $(document).ready(function() {
     $splitContainer = $('.split-container')
     $editorContainer = $('#editor-container')
@@ -23,7 +37,7 @@ $(document).ready(function() {
     $editor = $('#editor')
     $viewer = $('#viewer')
     $raw = $('#raw')
-    $mardownViewerToolbar = $('#mardown-viewer-toolbar')
+    $markdownViewerToolbar = $('#markdown-viewer-toolbar')
     $loadingBackdrop = $('#loadingBackdrop')
     $saveMarkdownButton = $('#saveMarkdownButton')
     $autocompletionCB = $('#autocompletionCB')
@@ -128,7 +142,8 @@ function initMarkdownIt() {
         }
     }
     md = window.markdownit('default', mdOptions);
-    md.disable([ 'link', 'image' ])
+    // md.disable([ 'link', 'image' ])
+    md.disable(markdownDisabledParsingRules)
     md.renderer.rules.table_open = function () {
         return '<table class="table table-striped">\n';
     };
@@ -137,6 +152,68 @@ function initMarkdownIt() {
     if (typeof markdownItCustomPostInit === 'function') {
         markdownItCustomPostInit()
     }
+    // patch md.fence to support mermaid
+    md.mermaid = mermaid
+    const fenceBackup = md.renderer.rules.fence.bind(md.renderer.rules)
+    // https://github.com/tylingsoft/markdown-it-mermaid/blob/master/src/index.js
+    md.renderer.rules.fence = function (tokens, idx, options, env, slf) {
+        const token = tokens[idx]
+        const code = token.content.trim()
+        if (token.info === 'mermaid') {
+            return renderMermaid(code)
+        }
+        const firstLine = code.split(/\n/)[0].trim()
+        if (firstLine === 'gantt' || firstLine === 'sequenceDiagram' || firstLine.match(/^graph (?:TB|BT|RL|LR|TD);?$/)) {
+            return renderMermaid(code)
+        }
+        return fenceBackup(tokens, idx, options, env, slf)
+    }
+    var mermaidTheme = 'neutral'
+    mermaid.mermaidAPI.initialize({
+        startOnLoad: false,
+        theme: mermaidTheme,
+    })
+}
+
+function renderMermaid(code) {
+    var id = 'm-' + Math.random().toString().split('.')[1]
+    doAsyncMermaidRendering(id, code)
+    return '<div id="' + id + '"></div>'
+}
+
+async function doAsyncMermaidRendering(id, code) {
+    function partialEscapeHtml(unsafe) {
+        return unsafe
+            .replace(/<-->/g, '§ARROW_BOTH§')
+            .replace(/-->/g, '§ARROW_RIGHT§')
+            .replace(/<--/g, '§ARROW_LEFT§')
+            .replace(/--\|>/g, '§ARROW_LABEL_RIGHT§')
+            .replace(/<\|--/g, '§ARROW_LABEL_LEFT§')
+
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+
+            .replace(/§ARROW_LABEL_RIGHT§/g, '-->|')
+            .replace(/§ARROW_LABEL_LEFT§/g, '<|--')
+            .replace(/§ARROW_BOTH§/g, '<-->')
+            .replace(/§ARROW_RIGHT§/g, '-->')
+            .replace(/§ARROW_LEFT§/g, '<--');
+    }
+    // Quotes need to be preserved for mermaid to parse some diagrams correctly
+
+    code = partialEscapeHtml(code)
+
+    setTimeout(async () => {
+        var html = ''
+        try {
+            var result = await mermaid.mermaidAPI.render('mermaid-graph' + id, code)
+            html = '<div class="mermaid">' + (result !== undefined ? result.svg : '- error while parsing mermaid graph -') + '</div>'
+        } catch (err) {
+            html = '<pre>' + 'mermaid error:\n' + partialEscapeHtml(err.message) + '</pre>'
+        }
+        $('#'+id).html(html)
+    }, 1);
 }
 
 function initCodeMirror() {
@@ -185,6 +262,11 @@ function initCodeMirror() {
             cm.showHint()
         }
     });
+    if (pasteImg !== undefined) {
+        cm.on("paste", function(cm, event) {
+            pasteImg(cm, event)
+        })
+    }
     checkIfFullScreenEnabled()
 }
 
@@ -341,8 +423,8 @@ function hideAll() {
 
 function setMode(mode) {
     currentMode = mode
-    $mardownViewerToolbar.find('button').removeClass('btn-inverse')
-    $mardownViewerToolbar.find('button[data-togglemode="' + mode + '"]').addClass('btn-inverse')
+    $markdownViewerToolbar.find('button').removeClass('btn-inverse')
+    $markdownViewerToolbar.find('button[data-togglemode="' + mode + '"]').addClass('btn-inverse')
     hideAll()
     $editorContainer.css('width', '');
     if (mode === 'raw') {
@@ -435,9 +517,9 @@ function cancelEdit() {
     setMode('viewer')
 }
 
-function downloadMarkdown(type) {
+function downloadMarkdown(type, report_id) {
     var content, fileType, baseName, extension
-    if (type == 'pdf') {
+    if (type == 'pdf-print') {
         if (currentMode != 'viewer' && currentMode != 'splitscreen') {
             setMode('viewer')
             setTimeout(function (){ // let the parser render the document
@@ -451,6 +533,10 @@ function downloadMarkdown(type) {
             }
         }
         return
+    } else if (type == 'pdf-module') {
+        var url = '/eventReports/downloadAsPDF/' + report_id
+        var name = 'event-report-' + (new Date()).getTime()
+        return downloadFile(url, name)
     } else if (type == 'text') {
         content = getEditorData()
         baseName = 'event-report-' + (new Date()).getTime()
@@ -472,12 +558,23 @@ function downloadMarkdown(type) {
     saveAs(blob, filename)
 }
 
+function downloadFile(uri, name) {
+    var a = document.createElement('a');
+    a.setAttribute('href', uri);
+    a.setAttribute('download', name);
+    var aj = $(a);
+    aj.appendTo('body');
+    aj[0].click();
+    aj.remove();
+}
+
 function showHelp() {
     $('#genericModal.markdown-modal-helper').modal();
 }
 
 function renderMarkdown() {
     var toRender = getEditorData()
+    toRender = injectTemplateVariables(toRender)
     var result = md.render(toRender)
     scrollMap = null
     $viewer.html(result)
@@ -489,6 +586,19 @@ function doRender() {
         clearTimeout(renderTimer);
         renderTimer = setTimeout(renderMarkdown, debounceDelay);
     }
+}
+
+function injectTemplateVariables(text) {
+    var newText = text
+    for (var varName in templateVariablesProxy) {
+        if (templateVariablesProxy.hasOwnProperty(varName)) {
+            var varSyntax = '{{\\s*' + varName + '\\s*}}'
+            var replacementValue = templateVariablesProxy[varName]
+            var regex = new RegExp(varSyntax, 'g');
+            newText = newText.replace(regex, replacementValue);
+        }
+    }
+    return newText;
 }
 
 function registerListener() {
@@ -678,7 +788,7 @@ function getRuleStatus(context, rulername, rulename) {
 }
 
 function isInsideModal() {
-    return $(cm.getWrapperElement()).closest('.modal').length > 0
+    return $(".markdownEditor-full-container").closest('.modal').length > 0
 }
 
 // Inject line numbers for sync scroll. Notes:

@@ -23,6 +23,8 @@
             <th><?php echo $this->Paginator->sort('push_sightings', 'Push Sightings');?></th>
             <th><?php echo $this->Paginator->sort('push_galaxy_clusters', 'Push Clusters');?></th>
             <th><?php echo $this->Paginator->sort('pull_galaxy_clusters', 'Pull Clusters');?></th>
+            <th><?php echo $this->Paginator->sort('push_analyst_data', 'Push Analyst Data');?></th>
+            <th><?php echo $this->Paginator->sort('pull_analyst_data', 'Pull Analyst Data');?></th>
             <th><?php echo $this->Paginator->sort('caching_enabled', 'Cache');?></th>
             <th><?php echo $this->Paginator->sort('unpublish_event');?></th>
             <th><?php echo $this->Paginator->sort('publish_without_email');?></th>
@@ -33,6 +35,7 @@
             <th><?php echo $this->Paginator->sort('self_signed');?></th>
             <th><?php echo $this->Paginator->sort('skip_proxy');?></th>
             <th><?php echo $this->Paginator->sort('org');?></th>
+            <th><?php echo $this->Paginator->sort('bound_user', 'Bound Sync Users');?></th>
             <th class="actions"><?php echo __('Actions');?></th>
         </tr>
     <?php
@@ -42,6 +45,9 @@ foreach ($servers as $server):
     $rules['pull'] = json_decode($server['Server']['pull_rules'], true);
     $syncOptions = array('pull', 'push');
     $fieldOptions = array('tags', 'orgs');
+    if (!empty(Configure::read('MISP.enable_synchronisation_filtering_on_type'))) {
+        $fieldOptions = array_merge($fieldOptions, ['type_attributes', 'type_objects']);
+    }
     $typeOptions = array('OR' => array('colour' => 'green', 'text' => 'allowed'), 'NOT' => array('colour' => 'red', 'text' => 'blocked'));
     $ruleDescription = array('pull' => '', 'push' => '');
     foreach ($syncOptions as $syncOption) {
@@ -52,7 +58,15 @@ foreach ($servers as $server):
                     foreach ($rules[$syncOption][$fieldOption][$typeOption] as $k => $temp) {
                         if ($k != 0) $ruleDescription[$syncOption] .= ', ';
                         if ($syncOption === 'push') {
-                            $temp = !empty($collection[$fieldOption][$temp]) ? $collection[$fieldOption][$temp] : $temp;
+                            if ($fieldOption == 'orgs') {
+                                $temp = !empty($collection[$fieldOption][$temp]) ? ($collection[$fieldOption][$temp] . ' (' . $temp . ')') : $temp;
+                            } else {
+                                $temp = !empty($collection[$fieldOption][$temp]) ? $collection[$fieldOption][$temp] : $temp;
+                            }
+                        } else {
+                            if ($fieldOption == 'orgs') {
+                                $temp = !empty($collection[$fieldOption][$temp]) ? ($collection[$fieldOption][$temp] . ' (' . $temp . ')') : $temp;
+                            }
                         }
                         $ruleDescription[$syncOption] .= h($temp);
                     }
@@ -112,11 +126,23 @@ foreach ($servers as $server):
         </td>
 
         <td><span class="<?= $server['Server']['internal']? 'fa fa-check' : 'fa fa-times' ?>" role="img" aria-label="<?= $server['Server']['internal']? __('Yes') : __('No') ?>" title="<?= $server['Server']['internal'] ? __('Internal instance that ignores distribution level degradation *WARNING: Only use this setting if you have several internal instances and the sync link is to an internal extension of the current MISP community*') : __('Normal sync link to an external MISP instance. Distribution degradation will follow the normal rules.') ?>"></span></td>
-        <td><span class="<?= $server['Server']['push']? 'fa fa-check' : 'fa fa-times' ?>" role="img" aria-label="<?= $server['Server']['push']? __('Yes') : __('No') ?>"></span><span class="short <?php if (!$server['Server']['push'] || empty($ruleDescription['push'])) echo "hidden"; ?>" data-toggle="popover" title="Distribution List" data-content="<?= $ruleDescription['push'] ?>"> (<?= __('Rules') ?>)</span></td>
-        <td><span class="<?= $server['Server']['pull']? 'fa fa-check' : 'fa fa-times' ?>" role="img" aria-label="<?= $server['Server']['pull']? __('Yes') : __('No') ?>"></span><span class="short <?php if (!$server['Server']['pull'] || empty($ruleDescription['pull'])) echo "hidden"; ?>" data-toggle="popover" title="Distribution List" data-content="<?= $ruleDescription['pull'] ?>"> (<?= __('Rules') ?>)</span></td>
+        <td>
+            <span class="<?= $server['Server']['push']? 'fa fa-check' : 'fa fa-times' ?>" role="img" aria-label="<?= $server['Server']['push']? __('Yes') : __('No') ?>"></span>
+            <span class="short <?php if (!$server['Server']['push'] || empty($ruleDescription['push'])) echo "hidden"; ?>" data-toggle="popover" title="Distribution List" data-content="<?= $ruleDescription['push'] ?>"> (<?= __('Rules') ?>)</span>
+            <span role="button" tabindex="0" aria-label="<?php echo __('Test Rules');?>" title="<?php echo __('Test how many Events can be access with the filter rules enabled');?>" class="btn btn-primary <?php if (!$server['Server']['push'] || empty($ruleDescription['push'])) echo "hidden"; ?>" style="line-height:10px; padding: 4px 4px; text-wrap: nowrap;" onClick="testSyncRule('<?php echo $server['Server']['id'];?>', 'push');"><?php echo __('Test Push Rules');?></span>
+            <span id="sync_rule_push_test_<?php echo $server['Server']['id'];?>"></span>
+        </td>
+        <td>
+            <span class="<?= $server['Server']['pull']? 'fa fa-check' : 'fa fa-times' ?>" role="img" aria-label="<?= $server['Server']['pull']? __('Yes') : __('No') ?>"></span>
+            <span class="short <?php if (!$server['Server']['pull'] || empty($ruleDescription['pull'])) echo "hidden"; ?>" data-toggle="popover" title="Distribution List" data-content="<?= $ruleDescription['pull'] ?>"> (<?= __('Rules') ?>)</span>
+            <span role="button" tabindex="0" aria-label="<?php echo __('Test Rules');?>" title="<?php echo __('Test how many Events can be access with the filter rules enabled');?>" class="btn btn-primary <?php if (!$server['Server']['pull'] || empty($ruleDescription['pull'])) echo "hidden"; ?>" style="line-height:10px; padding: 4px 4px; text-wrap: nowrap;" onClick="testSyncRule('<?php echo $server['Server']['id'];?>', 'pull');"><?php echo __('Test Pull Rules');?></span>
+            <span id="sync_rule_pull_test_<?php echo $server['Server']['id'];?>"></span>
+        </td>
         <td class="short"><span class="<?= $server['Server']['push_sightings'] ? 'fa fa-check' : 'fa fa-times' ?>" role="img" aria-label="<?= $server['Server']['push_sightings'] ? __('Yes') : __('No'); ?>"></span></td>
         <td class="short"><span class="<?= $server['Server']['push_galaxy_clusters'] ? 'fa fa-check' : 'fa fa-times' ?>" role="img" aria-label="<?= $server['Server']['push_galaxy_clusters'] ? __('Yes') : __('No'); ?>"></span></td>
         <td class="short"><span class="<?= $server['Server']['pull_galaxy_clusters'] ? 'fa fa-check' : 'fa fa-times' ?>" role="img" aria-label="<?= $server['Server']['pull_galaxy_clusters'] ? __('Yes') : __('No'); ?>"></span></td>
+        <td class="short"><span class="<?= $server['Server']['push_analyst_data'] ? 'fa fa-check' : 'fa fa-times' ?>" role="img" aria-label="<?= $server['Server']['push_analyst_data'] ? __('Yes') : __('No'); ?>"></span></td>
+        <td class="short"><span class="<?= $server['Server']['pull_analyst_data'] ? 'fa fa-check' : 'fa fa-times' ?>" role="img" aria-label="<?= $server['Server']['pull_analyst_data'] ? __('Yes') : __('No'); ?>"></span></td>
         <td>
             <?php
                 if ($server['Server']['caching_enabled']) {
@@ -159,21 +185,28 @@ foreach ($servers as $server):
         <td class="short"><span class="<?= $server['Server']['self_signed'] ? 'fa fa-check' : 'fa fa-times'; ?>" role="img" aria-label="<?= $server['Server']['self_signed'] ? __('Yes') : __('No'); ?>"></span></td>
         <td class="short"><span class="<?= $server['Server']['skip_proxy'] ? 'fa fa-check' : 'fa fa-times'; ?>" role="img" aria-label="<?= $server['Server']['skip_proxy'] ? __('Yes') : __('No'); ?>"></span></td>
         <td class="short"><a href="<?php echo $baseurl . "/organisations/view/" . h($server['Organisation']['id']); ?>"><?php echo h($server['Organisation']['name']); ?></a></td>
+        <td class="short">
+            <?php if (!empty($server['User'])): ?>
+                <?php foreach ($server['User'] as $user): ?>
+                    <a href="<?php echo $baseurl . "/users/view/" . h($user['id']); ?>"><?php echo h($user['email']); ?></a><br/>
+                <?php endforeach; ?>
+            <?php endif; ?>
+        </td>
         <td class="short action-links">
             <?php
                 echo sprintf('<a href="%s" title="%s" aria-label="%s" class="%s"></a>', $baseurl . '/servers/previewIndex/' . h($server['Server']['id']), __('Explore'), __('Explore'), 'fa fa-search');
                 if ($server['Server']['pull']) {
-                    echo sprintf('<a href="%s" title="%s" aria-label="%s" class="%s"></a>', $baseurl . '/servers/pull/' . h($server['Server']['id']) . '/update', __('Pull updates to events that already exist locally'), __('Pull updates'), 'fa fa-sync');
-                    echo sprintf('<a href="%s" title="%s" aria-label="%s" class="%s"></a>', $baseurl . '/servers/pull/' . h($server['Server']['id']) . '/full', __('Pull all'), __('Pull all'), 'fa fa-arrow-circle-down');
+                    echo $this->Form->postLink('', $baseurl . '/servers/pull/' . h($server['Server']['id']) . '/update', array('class' => 'fa fa-sync', 'title' => __('Pull updates to events that already exist locally'), 'aria-label' => __('Pull updates')), __('Are you sure you want to pull updates to events that already exist locally from this server?'));
+                    echo $this->Form->postLink('', $baseurl . '/servers/pull/' . h($server['Server']['id']) . '/full', array('class' => 'fa fa-arrow-circle-down', 'title' => __('Pull all'), 'aria-label' => __('Pull all')), __('Are you sure you want to pull all events from this server?'));
                 }
                 if ($server['Server']['pull'] && $server['Server']['pull_galaxy_clusters']) {
-                    echo sprintf('<a href="%s" title="%s" aria-label="%s" class="%s"></a>', $baseurl . '/servers/pull/' . h($server['Server']['id']) . '/pull_relevant_clusters', __('Pull known relevant custom clusters'), __('Pull relevant clusters'), 'fa fa-tags');
+                    echo $this->Form->postLink('', $baseurl . '/servers/pull/' . h($server['Server']['id']) . '/pull_relevant_clusters', array('class' => 'fa fa-tags', 'title' => __('Pull known relevant custom clusters'), 'aria-label' => __('Pull relevant clusters')), __('Are you sure you want to pull the known relevant custom clusters from this server?'));
                 }
                 if ($server['Server']['push'] || $server['Server']['push_sightings']) {
-                    echo sprintf('<a href="%s" title="%s" aria-label="%s" class="%s"></a>', $baseurl . '/servers/push/' . h($server['Server']['id']) . '/full', __('Push all'), __('Push all'), 'fa fa-arrow-circle-up');
+                    echo $this->Form->postLink('', $baseurl . '/servers/push/' . h($server['Server']['id']) . '/full', array('class' => 'fa fa-arrow-circle-up', 'title' => __('Push all'), 'aria-label' => __('Push all')), __('Are you sure you want to push all events to this server?'));
                 }
                 if ($server['Server']['caching_enabled']) {
-                    echo sprintf('<a href="%s" title="%s" aria-label="%s" class="%s"></a>', $baseurl . '/servers/cache/' . h($server['Server']['id']), __('Cache instance'), __('Cache instance'), 'fa fa-memory');
+                    echo $this->Form->postLink('', $baseurl . '/servers/cache/' . h($server['Server']['id']), array('class' => 'fa fa-memory', 'title' => __('Cache instance'), 'aria-label' => __('Cache instance')), __('Are you sure you want to cache the contents of this server?'));
                 }
                 if ($isSiteAdmin) {
                     echo sprintf('<a href="%s" title="%s" aria-label="%s" class="%s"></a>', $baseurl . '/servers/edit/' . h($server['Server']['id']), __('Edit'), __('Edit'), 'fa fa-edit');

@@ -1,7 +1,8 @@
 <?php
-
 class SyncTool
 {
+    const ALLOWED_CERT_FILE_EXTENSIONS = ['pem', 'crt'];
+
     /**
      * Take a server as parameter and return a HttpSocket object using the ssl options defined in the server settings
      * @param array|null $server
@@ -15,15 +16,19 @@ class SyncTool
         $params = ['compress' => true];
         if (!empty($server)) {
             if (!empty($server[$model]['cert_file'])) {
-                $params['ssl_cafile'] = APP . "files" . DS . "certs" . DS . $server[$model]['id'] . '.pem';
+                $params['ssl_cafile'] = APP . "files" . DS . "certs" . DS . $server[$model]['cert_file'];
             }
             if (!empty($server[$model]['client_cert_file'])) {
-                $params['ssl_local_cert'] = APP . "files" . DS . "certs" . DS . $server[$model]['id'] . '_client.pem';
+                $params['ssl_local_cert'] = APP . "files" . DS . "certs" . DS . $server[$model]['client_cert_file'];
             }
             if (!empty($server[$model]['self_signed'])) {
                 $params['ssl_allow_self_signed'] = true;
                 $params['ssl_verify_peer_name'] = false;
-                if (!isset($server[$model]['cert_file'])) {
+                // Must mirror the `!empty()` test above that decides whether a CA
+                // is pinned at all: `cert_file` is '' (not null) after a cert is
+                // removed, so `isset()` would leave verification enabled with no
+                // CA to verify against and break the connection.
+                if (empty($server[$model]['cert_file'])) {
                     $params['ssl_verify_peer'] = false;
                 }
             }
@@ -48,7 +53,7 @@ class SyncTool
      * @return HttpSocketExtended
      * @throws Exception
      */
-    public function createHttpSocket($params = array())
+    public function createHttpSocket(array $params = [])
     {
         // Use own CA PEM file
         $caPath = Configure::read('MISP.ca_path');
@@ -59,11 +64,42 @@ class SyncTool
             $params['ssl_cafile'] = $caPath;
         }
 
-        App::uses('HttpSocketExtended', 'Tools');
-        $HttpSocket = new HttpSocketExtended($params);
+        if ($minTlsVersion = Configure::read('Security.min_tls_version')) {
+            $version = 0;
+            switch ($minTlsVersion) {
+                case 'tlsv1_0':
+                    $version |= STREAM_CRYPTO_METHOD_TLSv1_0_CLIENT;
+                case 'tlsv1_1':
+                    $version |= STREAM_CRYPTO_METHOD_TLSv1_1_CLIENT;
+                case 'tlsv1_2':
+                    $version |= STREAM_CRYPTO_METHOD_TLSv1_2_CLIENT;
+                case 'tlsv1_3':
+                    if (defined('STREAM_CRYPTO_METHOD_TLSv1_3_CLIENT')) {
+                        $version |= STREAM_CRYPTO_METHOD_TLSv1_3_CLIENT;
+                    } else if ($minTlsVersion === 'tlsv1_3') {
+                        throw new Exception("TLSv1.3 is not supported by PHP.");
+                    }
+                    break;
+                default:
+                    throw new InvalidArgumentException("Invalid `Security.min_tls_version` option $minTlsVersion");
+            }
+            $params['ssl_crypto_method'] = $version;
+        }
+
+        if (function_exists('curl_init')) {
+            if (!isset($params['timeout']) && Configure::check('MISP.curl_request_timeout')) {
+                $params['timeout'] = (int)Configure::read('MISP.curl_request_timeout');
+            }
+            App::uses('CurlClient', 'Tools');
+            $HttpSocket = new CurlClient($params);
+        } else {
+            App::uses('HttpSocketExtended', 'Tools');
+            $HttpSocket = new HttpSocketExtended($params);
+        }
+
         $proxy = Configure::read('Proxy');
         if (empty($params['skip_proxy']) && isset($proxy['host']) && !empty($proxy['host'])) {
-            $HttpSocket->configProxy($proxy['host'], $proxy['port'], $proxy['method'], $proxy['user'], $proxy['password']);
+            $HttpSocket->configProxy($proxy['host'], $proxy['port'] ?? 3128, $proxy['method'] ?? null, $proxy['user'] ?? null, $proxy['password'] ?? null);
         }
         return $HttpSocket;
     }

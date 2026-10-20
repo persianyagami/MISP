@@ -7,7 +7,9 @@
             2 => 'success',
             3 => 'info'
         );
-        if ($setting['type'] == 'boolean') $setting['value'] = ($setting['value'] === true ? 'true' : 'false');
+        if ($setting['type'] === 'boolean') {
+            $setting['value'] = $setting['value'] === true ? 'true' : 'false';
+        }
         if (isset($setting['options'])) {
             $setting['value'] = empty($setting['options'][$setting['value']]) ? null : $setting['options'][$setting['value']];
         }
@@ -93,11 +95,11 @@
             sprintf(
                 '%s_%s_row',
                 h($subGroup),
-                $k
+                h($k)
             ),
             h($subGroup),
             !empty($setting['error']) ? $colour_coding[$setting['level']] : '',
             $columns
         );
     }
-?>
+

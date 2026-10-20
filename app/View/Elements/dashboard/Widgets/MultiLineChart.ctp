@@ -6,6 +6,7 @@
             h($data['formula'])
         );
     }
+    $y_axis = $data['y-axis'] ?? 'Count';
 ?>
 <div id="chartContainer-<?= $seed ?>" style="flex-grow: 1; position:relative;"></div>
 <script>
@@ -50,12 +51,12 @@ function init<?= $seed ?>() { // variables and functions have their own scope (n
         show_legend: true,
         style: {
             xlabel: "Date",
-            ylabel: "Count",
+            ylabel: "<?= h($y_axis) ?>",
             hideXAxis: false,
             hideYAxis: false,
         },
         max_datapoints: null,
-        margin: {top: 10, right: 20, bottom: 35, left: 40},
+        margin: {top: 10, right: 20, bottom: 35, left: 50},
         animation_short_duration: 100,
         redraw_timeout: 300, // used after resize
         enable_total: false

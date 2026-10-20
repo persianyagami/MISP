@@ -33,6 +33,7 @@
                     'field' => 'threat_level_id',
                     'class' => 'input',
                     'options' => $threatLevels,
+                    'default' => Configure::check('MISP.default_event_threat_level') ? Configure::read('MISP.default_event_threat_level') : '4',
                     'label' => __("Threat Level"),
                     'stayInLine' => 1,
                     'type' => 'dropdown'
@@ -57,7 +58,12 @@
                     'label' => __("Extends Event"),
                     'default' => isset($extends_uuid) ? $extends_uuid : ''
                 ),
-                '<div id="event_preview" style="width:446px;"></div>'
+                array(
+                    'type' => 'div',
+                    'style' => 'width:446px;',
+                    'id' => 'event_preview',
+                    'label' => false
+                )
             ),
             'submit' => array(
                 'action' => $action

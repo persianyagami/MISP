@@ -3,16 +3,30 @@ App::uses('AppModel', 'Model');
 
 class Log extends AppModel
 {
-    public $warningActions = array(
+    const WARNING_ACTIONS = [
         'warning',
         'change_pw',
         'login_fail',
         'version_warning',
         'auth_fail'
-    );
-    public $errorActions = array(
+    ];
+
+    const ERROR_ACTIONS = [
         'error'
-    );
+    ];
+
+    const AUTH_ACTIONS = [
+        'auth',
+        'auth_fail',
+        'auth_alert',
+        'change_pw',
+        'login',
+        'login_fail',
+        'logout',
+        'password_reset',
+        'forgot',
+    ];
+
     public $validate = array(
         'action' => array(
             'rule' => array(
@@ -24,8 +38,10 @@ class Log extends AppModel
                     'add',
                     'admin_email',
                     'attachTags',
+                    'attachTagToObject',
                     'auth',
                     'auth_fail',
+                    'auth_alert',
                     'blocklisted',
                     'captureRelations',
                     'change_pw',
@@ -38,15 +54,21 @@ class Log extends AppModel
                     'enable',
                     'enrichment',
                     'error',
+                    'execute_blueprint',
+                    'execute_workflow',
+                    'exec_module',
                     'export',
                     'fetchEvent',
                     'file_upload',
+                    'forgot',
                     'galaxy',
                     'include_formula',
+                    'load_module',
                     'login',
                     'login_fail',
                     'logout',
                     'merge',
+                    'password_reset',
                     'pruneUpdateLogs',
                     'publish',
                     'publish_sightings',
@@ -57,6 +79,7 @@ class Log extends AppModel
                     'registration',
                     'registration_error',
                     'remove_dead_workers',
+                    'removeTagFromObject',
                     'request',
                     'request_delegation',
                     'reset_auth_key',
@@ -68,8 +91,10 @@ class Log extends AppModel
                     'update',
                     'update_database',
                     'update_db_worker',
+                    'updateCryptoKeys',
                     'upgrade_24',
                     'upload_sample',
+                    'validateSig',
                     'version_warning',
                     'warning',
                     'wipe_default'
@@ -78,6 +103,37 @@ class Log extends AppModel
             'message' => 'Options : ...'
         )
     );
+
+    public $searchModelList = [
+        'Attribute',
+        'Allowedlist',
+        'AuthKey',
+        'Event',
+        'EventBlocklist',
+        'EventTag',
+        'Feed',
+        'DecayingModel',
+        'EventGraph',
+        'EventReport',
+        'MispObject',
+        'Organisation',
+        'Post',
+        'Regexp',
+        'Role',
+        'Server',
+        'ShadowAttribute',
+        'SharingGroup',
+        'Tag',
+        'Task',
+        'Taxonomy',
+        'Template',
+        'Thread',
+        'User',
+        'Galaxy',
+        'GalaxyCluster',
+        'GalaxyClusterRelation',
+        'Workflow',
+    ];
 
     public $actionDefinitions = array(
         'login' => array('desc' => 'Login action', 'formdesc' => "Login action"),
@@ -91,7 +147,7 @@ class Log extends AppModel
 
     public $logMeta = array(
         'email' => array('values' => array('email'), 'name' => 'Emails'),
-        'auth_issues' => array('values' => array('login_fail', 'auth_fail'), 'name' => 'Authentication issues')
+        'auth_issues' => array('values' => array('login_fail', 'auth_fail', 'auth_alert'), 'name' => 'Authentication issues')
     );
 
     public $logMetaAdmin = array(
@@ -101,11 +157,37 @@ class Log extends AppModel
         'email' => array('values' => array('admin_email'))
     );
 
+    public $actsAs = ['LightPaginator'];
+
+    private $elasticSearchClient;
+
     /**
      * Null when not defined, false when not enabled
      * @var Syslog|null|false
      */
     private $syslog;
+
+    public function beforeValidate($options = [])
+    {
+        if (empty($this->data['Log']['change'])) {
+            if (is_array($this->data['Log']['change'])) {
+                $output = [];
+                foreach ($this->data['Log']['change'] as $field => $values) {
+                    $sanitiseFields = ['password', 'api_key', 'authkey', 'headers', 'api_token', 'token', 'key'];
+                    $isSecret = in_array($field, $sanitiseFields) || ($field === 'authkey' && Configure::read('Security.do_not_log_authkeys'));
+                    if ($isSecret) {
+                        $oldValue = $newValue = "*****";
+                    } else {
+                        list($oldValue, $newValue) = $values;
+                    }
+                    $output[] = "$field ($oldValue) => ($newValue)";
+                }
+                $this->data['Log']['change'] = implode(", ", $output);
+            }
+    
+        }
+        return true;
+    }
 
     public function beforeSave($options = array())
     {
@@ -113,11 +195,9 @@ class Log extends AppModel
             return false;
         }
         if (Configure::read('MISP.log_client_ip')) {
-            $ipHeader = Configure::read('MISP.log_client_ip_header') ?: 'REMOTE_ADDR';
-            if (isset($_SERVER[$ipHeader])) {
-                $this->data['Log']['ip'] = $_SERVER[$ipHeader];
-            }
+            $this->data['Log']['ip'] = $this->_remoteIp();
         }
+        $this->data['Log']['request_is_rest'] = Configure::read('CurrentRequestIsRest');
         $setEmpty = array('title' => '', 'model' => '', 'model_id' => 0, 'action' => '', 'user_id' => 0, 'change' => '', 'email' => '', 'org' => '', 'description' => '', 'ip' => '');
         foreach ($setEmpty as $field => $empty) {
             if (empty($this->data['Log'][$field])) {
@@ -143,10 +223,19 @@ class Log extends AppModel
         return true;
     }
 
+    public function afterSave($created, $options = array())
+    {
+        // run workflow if needed, but skip workflow for certain types, to prevent loops
+        if (!in_array($this->data['Log']['model'], ['Log', 'Workflow'])) {
+            $trigger_id = 'log-after-save';
+            $workflowErrors = [];
+            $this->executeTrigger($trigger_id, $this->data, $workflowErrors);
+        }
+        return true;
+    }
+
     public function returnDates($org = 'all')
     {
-        $dataSourceConfig = ConnectionManager::getDataSource('default')->config;
-        $dataSource = $dataSourceConfig['datasource'];
         $conditions = array();
         $this->Organisation = ClassRegistry::init('Organisation');
         if ($org !== 'all') {
@@ -157,14 +246,14 @@ class Log extends AppModel
             $conditions['org'] = $org['name'];
         }
         $conditions['AND']['NOT'] = array('action' => array('login', 'logout', 'changepw'));
-        if ($dataSource == 'Database/Mysql' || $dataSource == 'Database/MysqlObserver') {
+        if ($this->isMysql()) {
             $validDates = $this->find('all', array(
                     'fields' => array('DISTINCT UNIX_TIMESTAMP(DATE(created)) AS Date', 'count(id) AS count'),
                     'conditions' => $conditions,
                     'group' => array('Date'),
                     'order' => array('Date')
             ));
-        } elseif ($dataSource == 'Database/Postgres') {
+        } else {
             // manually generate the query for Postgres
             // cakephp ORM would escape "DATE" datatype in CAST expression
             $condnotinaction = "'" . implode("', '", $conditions['AND']['NOT']['action']) . "'";
@@ -182,7 +271,7 @@ class Log extends AppModel
             $validDates = $this->query($sql);
         }
         $data = array();
-        foreach ($validDates as $k => $date) {
+        foreach ($validDates as $date) {
             $data[$date[0]['Date']] = intval($date[0]['count']);
         }
         return $data;
@@ -201,19 +290,19 @@ class Log extends AppModel
      */
     public function createLogEntry($user, $action, $model, $modelId = 0, $title = '', $change = '')
     {
-        if (in_array($action, ['tag', 'galaxy', 'publish', 'publish_sightings'], true) && Configure::read('MISP.log_new_audit')) {
+        if (in_array($action, ['tag', 'galaxy', 'publish', 'publish_sightings', 'enable', 'edit'], true) && Configure::read('MISP.log_new_audit')) {
             return; // Do not store tag changes when new audit is enabled
         }
         if ($user === 'SYSTEM') {
-            $user = array('Organisation' => array('name' => 'SYSTEM'), 'email' => 'SYSTEM', 'id' => 0);
+            $user = ['Organisation' => ['name' => 'SYSTEM'], 'email' => 'SYSTEM', 'id' => 0];
         } else if (!is_array($user)) {
             throw new InvalidArgumentException("User must be array or 'SYSTEM' string.");
         }
 
         if (is_array($change)) {
-            $output = array();
+            $output = [];
             foreach ($change as $field => $values) {
-                $isSecret = strpos($field, 'password') !== false || ($field === 'authkey' && Configure::read('Security.do_not_log_authkeys'));
+                $isSecret = str_contains($field, 'password') || $field === 'api_key' || $field === 'headers' || ($field === 'authkey' && Configure::read('Security.do_not_log_authkeys'));
                 if ($isSecret) {
                     $oldValue = $newValue = "*****";
                 } else {
@@ -224,8 +313,13 @@ class Log extends AppModel
             $change = implode(", ", $output);
         }
 
+        // If Sentry is installed, send log breadcrumb to Sentry
+        if (function_exists('\Sentry\addBreadcrumb')) {
+            \Sentry\addBreadcrumb('log', $title, [], Sentry\Breadcrumb::LEVEL_INFO);
+        }
+
         $this->create();
-        $result = $this->save(array(
+        $result = $this->save(['Log' => [
             'org' => $user['Organisation']['name'],
             'email' => $user['email'],
             'user_id' => $user['id'],
@@ -234,10 +328,13 @@ class Log extends AppModel
             'change' => $change,
             'model' => $model,
             'model_id' => $modelId,
-        ));
+        ]]);
 
         if (!$result) {
             if ($action === 'request' && !empty(Configure::read('MISP.log_paranoid_skip_db'))) {
+                return null;
+            }
+            if (!empty(Configure::read('MISP.log_skip_db_logs_completely'))) {
                 return null;
             }
 
@@ -245,6 +342,22 @@ class Log extends AppModel
         }
 
         return $result;
+    }
+
+    /**
+     * @param array|string $user
+     * @param string $action
+     * @param string $model
+     * @param string $title
+     * @param array $validationErrors
+     * @param array $fullObject
+     * @throws Exception
+     */
+    public function validationError($user, $action, $model, $title, array $validationErrors, array $fullObject)
+    {
+        $this->log($title, LOG_WARNING);
+        $change = 'Validation errors: ' . JsonTool::encode($validationErrors) . ' Full ' . $model  . ': ' . JsonTool::encode($fullObject);
+        $this->createLogEntry($user, $action, $model, 0, $title, $change);
     }
 
     // to combat a certain bug that causes the upgrade scripts to loop without being able to set the correct version
@@ -291,43 +404,41 @@ class Log extends AppModel
         ));
     }
 
-
     public function pruneUpdateLogsRouter($user)
     {
         if (Configure::read('MISP.background_jobs')) {
+
+            /** @var Job $job */
             $job = ClassRegistry::init('Job');
-            $job->create();
-            $data = array(
-                    'worker' => 'default',
-                    'job_type' => 'prune_update_logs',
-                    'job_input' => 'All update entries',
-                    'status' => 0,
-                    'retries' => 0,
-                    'org_id' => $user['org_id'],
-                    'org' => $user['Organisation']['name'],
-                    'message' => 'Purging the heretic.',
+            $jobId = $job->createJob(
+                $user,
+                Job::WORKER_DEFAULT,
+                'prune_update_logs',
+                'All update entries',
+                'Purging the heretic.'
             );
-            $job->save($data);
-            $jobId = $job->id;
-            $process_id = CakeResque::enqueue(
-                    'default',
-                    'AdminShell',
-                    array('prune_update_logs', $jobId, $user['id']),
-                    true
+
+            return $this->getBackgroundJobsTool()->enqueue(
+                BackgroundJobsTool::DEFAULT_QUEUE,
+                BackgroundJobsTool::CMD_ADMIN,
+                [
+                    'prune_update_logs',
+                    $jobId,
+                    $user['id']
+                ],
+                true,
+                $jobId
             );
-            $job->saveField('process_id', $process_id);
-            return $process_id;
         } else {
             $result = $this->pruneUpdateLogs(false, $user);
             return $result;
         }
     }
 
-    public function logData($data)
+    private function logData(array $data)
     {
-        if (Configure::read('Plugin.ZeroMQ_enable') && Configure::read('Plugin.ZeroMQ_audit_notifications_enable')) {
-            $pubSubTool = $this->getPubSubTool();
-            $pubSubTool->publish($data, 'audit', 'log');
+        if ($this->pubToZmq('audit')) {
+            $this->getPubSubTool()->publish($data, 'audit', 'log');
         }
 
         $this->publishKafkaNotification('audit', $data, 'log');
@@ -345,6 +456,14 @@ class Log extends AppModel
         }
 
         // write to syslogd as well if enabled
+        $this->sendToSyslog($data);
+        $this->sendToEcs($data);
+
+        return true;
+    }
+
+    private function sendToSyslog(array $data)
+    {
         if ($this->syslog === null) {
             if (Configure::read('Security.syslog')) {
                 $options = [];
@@ -362,26 +481,64 @@ class Log extends AppModel
             }
         }
         if ($this->syslog) {
-            $action = 'info';
+            $action = LOG_INFO;
             if (isset($data['Log']['action'])) {
-                if (in_array($data['Log']['action'], $this->errorActions, true)) {
-                    $action = 'err';
-                }
-                if (in_array($data['Log']['action'], $this->warningActions, true)) {
-                    $action = 'warning';
+                if (in_array($data['Log']['action'], self::ERROR_ACTIONS, true)) {
+                    $action = LOG_ERR;
+                } else if (in_array($data['Log']['action'], self::WARNING_ACTIONS, true)) {
+                    $action = LOG_WARNING;
                 }
             }
 
-            $entry = $data['Log']['action'];
-            if (!empty($data['Log']['title'])) {
-                $entry .= " -- {$data['Log']['title']}";
-            }
-            if (!empty($data['Log']['description'])) {
-                $entry .= " -- {$data['Log']['description']}";
-            }
+            $entry = sprintf(
+                '%s -- %s -- %s',
+                $data['Log']['action'],
+                empty($data['Log']['title']) ? '' : $formatted_title = preg_replace('/\s+/', " ", $data['Log']['title']),
+                empty($data['Log']['description']) ? 
+                    (empty($data['Log']['change']) ? '' : preg_replace('/\s+/', " ", $data['Log']['change'])) :
+                    preg_replace('/\s+/', " ", $data['Log']['description'])
+            );
             $this->syslog->write($action, $entry);
         }
-        return true;
+    }
+
+    /**
+     * @param array $data
+     * @return void
+     * @throws JsonException
+     */
+    private function sendToEcs(array $data)
+    {
+        if (!Configure::read('Security.ecs_log')) {
+            return;
+        }
+
+        $log = $data['Log'];
+
+        $action = $log['action'];
+        if ($action === 'email') {
+            return; // do not log email actions as it is logged with more details by `writeEmailLog` function
+        }
+
+        if (in_array($action, self::ERROR_ACTIONS, true)) {
+            $type = 'error';
+        } else if (in_array($action, self::WARNING_ACTIONS, true)) {
+            $type = 'warning';
+        } else {
+            $type = 'info';
+        }
+
+        $message = $action;
+        if (!empty($log['title'])) {
+            $message .= " -- {$log['title']}";
+        }
+        if (!empty($log['description'])) {
+            $message .= " -- {$log['description']}";
+        } else if (!empty($log['change'])) {
+            $message .= " -- " . (is_string($log['change']) ? $log['change'] : JsonTool::encode($log['change']));
+        }
+
+        EcsLog::writeApplicationLog($type, $action, $message);
     }
 
     public function filterSiteAdminSensitiveLogs($list)
@@ -1119,6 +1276,32 @@ class Log extends AppModel
                     }
                 }
                 break;
+        }
+    }
+
+    private function getElasticSearchTool()
+    {
+        if (!$this->elasticSearchClient) {
+            App::uses('ElasticSearchClient', 'Tools');
+            $client = new ElasticSearchClient();
+            $client->initTool();
+            $this->elasticSearchClient = $client;
+        }
+        return $this->elasticSearchClient;
+    }
+
+    /**
+     * @param $data
+     * @param $options
+     * @return array|bool|mixed
+     */
+    public function saveOrFailSilently($data, $options = null)
+    {
+        try {
+            return $this->save($data, $options);
+        } catch (Exception $e) {
+            $this->logException('Could not save log to database', $e);
+            return false;
         }
     }
 }

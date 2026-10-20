@@ -27,9 +27,6 @@ class OrganisationsController extends AppController
 
     public function index()
     {
-        if (!$this->Auth->user('Role')['perm_sharing_group'] && Configure::read('Security.hide_organisation_index_from_users')) {
-            throw new MethodNotAllowedException(__('This feature is disabled on this instance for normal users.'));
-        }
         $conditions = array();
         // We can either index all of the organisations existing on this instance (default)
         // or we can pass the 'external' keyword in the URL to look at the added external organisations
@@ -115,7 +112,9 @@ class OrganisationsController extends AppController
                     $this->request->data = $this->request->data['request'];
                 }
                 if (!isset($this->request->data['Organisation'])) {
-                    $this->request->data['Organisation'] = $this->request->data;
+                    // wrap rather than nest: a flat body left beside its own copy is
+                    // refused by AppModel::save()
+                    $this->request->data = array('Organisation' => $this->request->data);
                 }
                 if (isset($this->request->data['Organisation']['id'])) {
                     unset($this->request->data['Organisation']['id']);
@@ -372,19 +371,15 @@ class OrganisationsController extends AppController
         }
         $idList = json_decode($idList, true);
         $id_exclusion_list = array_merge($idList, array($this->Auth->user('Organisation')['id']));
-        $temp = $this->Organisation->find('all', array(
-                'conditions' => array(
-                        'local' => $local,
-                        'id !=' => $id_exclusion_list,
-                ),
-                'recursive' => -1,
-                'fields' => array('id', 'name'),
-                'order' => array('lower(name) ASC')
+        $orgs = $this->Organisation->find('list', array(
+            'conditions' => array(
+                'local' => $local,
+                'id !=' => $id_exclusion_list,
+            ),
+            'recursive' => -1,
+            'fields' => array('id', 'name'),
+            'order' => array('lower(name) ASC')
         ));
-        $orgs = array();
-        foreach ($temp as $org) {
-            $orgs[] = array('id' => $org['Organisation']['id'], 'name' => $org['Organisation']['name']);
-        }
         $this->set('local', $local);
         $this->layout = false;
         $this->autoRender = false;
@@ -396,16 +391,19 @@ class OrganisationsController extends AppController
     {
         $this->layout = false;
         $this->autoRender = false;
-        $this->set('id', $id);
+        $this->set('id', (int)$id);
         $this->set('removable', $removable);
         $this->set('extend', $extend);
         $this->render('ajax/sg_org_row_empty');
     }
 
+    /**
+     * @deprecated Probably not used anywhere.
+     */
     public function getUUIDs()
     {
-        if (!$this->Auth->user('Role')['perm_sync']) {
-            throw new MethodNotAllowedException(__('This action is restricted to sync users'));
+        if (Configure::read('Security.hide_organisation_index_from_users')) {
+            throw new MethodNotAllowedException(__('This action is not enabled on this instance.'));
         }
         $temp = $this->Organisation->find('all', array(
                 'recursive' => -1,
@@ -482,10 +480,49 @@ class OrganisationsController extends AppController
 
         $logo = $this->request->data['Organisation']['logo'];
         if ($logo['size'] > 0 && $logo['error'] == 0) {
+            // Only a genuine PHP upload may reach the filesystem probes below.
+            // A forged tmp_name would otherwise leak file existence and image
+            // type through the distinct validation messages that follow.
+            if (empty($logo['tmp_name']) || !is_uploaded_file($logo['tmp_name'])) {
+                return false;
+            }
             $extension = pathinfo($logo['name'], PATHINFO_EXTENSION);
             $filename = $orgId . '.' . ($extension === 'svg' ? 'svg' : 'png');
-            if (!empty($logo['tmp_name']) && is_uploaded_file($logo['tmp_name'])) {
-                return move_uploaded_file($logo['tmp_name'], APP . 'webroot/img/orgs/' . $filename);
+
+            if ($logo['size'] > 250 * 1024) {
+                $this->Flash->error(__('This organisation logo is too large, maximum file size allowed is 250 kB.'));
+                return false;
+            }
+
+            if ($extension !== 'svg' && $extension !== 'png') {
+                $this->Flash->error(__('Invalid file extension, Only PNG and SVG images are allowed.'));
+                return false;
+            }
+            $matches = null;
+            $tmp_name = $logo['tmp_name'];
+            if (preg_match_all('/[\w\/\-\.]*/', $tmp_name, $matches) && file_exists($logo['tmp_name'])) {
+                $tmp_name = $matches[0][0];
+                $imgMime = mime_content_type($tmp_name);
+            } else {
+                throw new NotFoundException(__('Invalid file.'));    
+            }
+            if ($extension === 'png' && (function_exists('exif_imagetype') && !exif_imagetype($logo['tmp_name']))) {
+                $this->Flash->error(__('This is not a valid PNG image.'));
+                return false;
+            }
+
+            if ($extension === 'svg' && !($imgMime === 'image/svg+xml' || $imgMime === 'image/svg')) {
+                $this->Flash->error(__('This is not a valid SVG image.'));
+                return false;
+            }
+
+            if ($extension === 'svg' && !Configure::read('Security.enable_svg_logos')) {
+                $this->Flash->error(__('Invalid file extension, SVG images are not allowed.'));
+                return false;
+            }
+
+            if (!empty($tmp_name) && is_uploaded_file($tmp_name)) {
+                return move_uploaded_file($tmp_name, APP . 'files/img/orgs/' . $filename);
             }
         }
 

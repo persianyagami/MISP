@@ -1,5 +1,9 @@
 <?php
 App::uses('AppModel', 'Model');
+
+/**
+ * @property GalaxyCluster $GalaxyCluster
+ */
 class GalaxyElement extends AppModel
 {
     public $useTable = 'galaxy_elements';
@@ -42,37 +46,6 @@ class GalaxyElement extends AppModel
             }
         }
         $this->saveMany($tempElements);
-    }
-
-    public function update($galaxy_id, $oldClusters, $newClusters)
-    {
-        $elementsToSave = array();
-        // Since we are dealing with flat files as the end all be all content, we are safe to just drop all of the old clusters and recreate them.
-        foreach ($oldClusters as $oldCluster) {
-            $this->deleteAll(array('GalaxyElement.galaxy_cluster_id' => $oldCluster['GalaxyCluster']['id']));
-        }
-        foreach ($newClusters as $newCluster) {
-            $tempCluster = array();
-            foreach ($newCluster as $key => $value) {
-                // Don't store the reserved fields as elements
-                if ($key == 'description' || $key == 'value') {
-                    continue;
-                }
-                if (is_array($value)) {
-                    foreach ($value as $arrayElement) {
-                        $tempCluster[] = array('key' => $key, 'value' => $arrayElement);
-                    }
-                } else {
-                    $tempCluster[] = array('key' => $key, 'value' => $value);
-                }
-            }
-
-            foreach ($tempCluster as $key => $value) {
-                $tempCluster[$key]['galaxy_cluster_id'] = $oldCluster['GalaxyCluster']['id'];
-            }
-            $elementsToSave = array_merge($elementsToSave, $tempCluster);
-        }
-        $this->saveMany($elementsToSave);
     }
 
     public function captureElements($user, $elements, $clusterId)
@@ -129,5 +102,43 @@ class GalaxyElement extends AppModel
         }
         $expanded = Hash::expand($keyedValue);
         return $expanded;
+    }
+
+    /**
+     * getClusterIDsFromMatchingElements
+     *
+     * @param array $user
+     * @param array $elements an associative array containg the elements to search for
+     *  Example: {"synonyms": "apt42"}
+     * @return array
+     */
+    public function getClusterIDsFromMatchingElements(array $user, array $elements): array
+    {
+        $conditionCount = 0;
+        $elementConditions = [];
+        foreach ($elements as $key => $value) {
+            $elementConditions['OR'][] = [
+                'GalaxyElement.key' => $key,
+                'GalaxyElement.value' => $value,
+            ];
+            $conditionCount += is_array($value) ? count($value) : 1;
+        }
+        $conditions = [
+            $this->buildACLConditions($user),
+            $elementConditions,
+        ];
+        $elements = $this->find('all', [
+            'fields' => ['GalaxyElement.galaxy_cluster_id'],
+            'conditions' => $conditions,
+            'contain' => ['GalaxyCluster' => ['fields' => ['id', 'distribution', 'org_id']]],
+            'group' => ['GalaxyElement.galaxy_cluster_id'],
+            'having' => ['COUNT(GalaxyElement.id) =' => $conditionCount],
+            'recursive' => -1
+        ]);
+        $clusterIDs = [];
+        foreach ($elements as $element) {
+            $clusterIDs[] = $element['GalaxyElement']['galaxy_cluster_id'];
+        }
+        return $clusterIDs;
     }
 }

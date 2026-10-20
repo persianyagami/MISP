@@ -3,6 +3,57 @@
     if (!$advancedEnabled) {
         echo '<div class="alert">' . __('Advanced auth keys are not enabled.') . '</div>';
     }
+    $fields = [
+        [
+            'name' => '#',
+            'sort' => 'AuthKey.id',
+            'data_path' => 'AuthKey.id',
+        ],
+        [
+            'name' => __('User'),
+            'sort' => 'User.email',
+            'data_path' => 'User.email',
+            'element' => empty($user_id) ? 'links' : 'generic_field',
+            'url' => $baseurl . '/users/view',
+            'url_params_data_paths' => ['User.id'],
+            'requirement' => $me['Role']['perm_admin'] || $me['Role']['perm_site_admin'],
+        ],
+        [
+            'name' => __('Auth Key'),
+            'sort' => 'AuthKey.authkey_start',
+            'element' => 'authkey',
+            'data_path' => 'AuthKey',
+        ],
+        [
+            'name' => __('Expiration'),
+            'sort' => 'AuthKey.expiration',
+            'data_path' => 'AuthKey.expiration',
+            'element' => 'expiration'
+        ],
+        [
+            'name' => ('Last used'),
+            'data_path' => 'AuthKey.last_used',
+            'element' => 'datetime',
+            'requirements' => $keyUsageEnabled,
+            'empty' => __('Never'),
+        ],
+        [
+            'name' => __('Comment'),
+            'sort' => 'AuthKey.comment',
+            'data_path' => 'AuthKey.comment',
+        ],
+        [
+            'name' => __('Allowed IPs'),
+            'data_path' => 'AuthKey.allowed_ips',
+        ],
+    ];
+    if(!Configure::read("MISP.disable_seen_ips_authkeys")){
+            $fields[] =[
+                'name' => __('Seen IPs'),
+                'data_path' => 'AuthKey.unique_ips',
+                'element' => 'authkey_pin',
+            ];
+    }
     echo $this->element('genericElements/IndexTable/index_table', [
         'data' => [
             'data' => $data,
@@ -16,15 +67,9 @@
                                 'type' => 'simple',
                                 'fa-icon' => 'plus',
                                 'text' => __('Add authentication key'),
-                                'class' => 'btn btn-primary',
-                                'onClick' => 'openGenericModal',
-                                'onClickParams' => [
-                                    sprintf(
-                                        '%s/auth_keys/add%s',
-                                        $baseurl,
-                                        empty($user_id) ? '' : ('/' . $user_id)
-                                    )
-                                ]
+                                'class' => 'btn-primary modal-open',
+                                'url' => "$baseurl/auth_keys/add" . (empty($user_id) ? '' : ('/' . $user_id)),
+                                'requirement' => $canCreateAuthkey
                             ]
                         ]
                     ],
@@ -36,49 +81,7 @@
                     ]
                 ]
             ],
-            'fields' => [
-                [
-                    'name' => '#',
-                    'sort' => 'AuthKey.id',
-                    'data_path' => 'AuthKey.id',
-                ],
-                [
-                    'name' => __('User'),
-                    'sort' => 'User.email',
-                    'data_path' => 'User.email',
-                    'element' => empty($user_id) ? 'links' : 'generic_field',
-                    'url' => $baseurl . '/users/view',
-                    'url_params_data_paths' => ['User.id'],
-                ],
-                [
-                    'name' => __('Auth Key'),
-                    'sort' => 'AuthKey.authkey_start',
-                    'element' => 'authkey',
-                    'data_path' => 'AuthKey',
-                ],
-                [
-                    'name' => __('Expiration'),
-                    'sort' => 'AuthKey.expiration',
-                    'data_path' => 'AuthKey.expiration',
-                    'element' => 'expiration'
-                ],
-                [
-                    'name' => ('Last used'),
-                    'data_path' => 'AuthKey.last_used',
-                    'element' => 'datetime',
-                    'requirements' => $keyUsageEnabled,
-                    'empty' => __('Never'),
-                ],
-                [
-                    'name' => __('Comment'),
-                    'sort' => 'AuthKey.comment',
-                    'data_path' => 'AuthKey.comment',
-                ],
-                [
-                    'name' => __('Allowed IPs'),
-                    'data_path' => 'AuthKey.allowed_ips',
-                ],
-            ],
+            'fields' => $fields,
             'title' => empty($ajax) ? __('Authentication key Index') : false,
             'description' => empty($ajax) ? __('A list of API keys bound to a user.') : false,
             'pull' => 'right',
@@ -99,15 +102,15 @@
                     ),
                     'icon' => 'edit',
                     'title' => 'Edit auth key',
+                    'requirement' => $canCreateAuthkey
                 ],
                 [
-                    'onclick' => sprintf(
-                        'openGenericModal(\'%s/authKeys/delete/[onclick_params_data_path]\');',
-                        $baseurl
-                    ),
-                    'onclick_params_data_path' => 'AuthKey.id',
+                    'class' => 'modal-open',
+                    'url' => "$baseurl/authKeys/delete",
+                    'url_params_data_paths' => ['AuthKey.id'],
                     'icon' => 'trash',
                     'title' => __('Delete auth key'),
+                    'requirement' => $canCreateAuthkey
                 ]
             ]
         ]

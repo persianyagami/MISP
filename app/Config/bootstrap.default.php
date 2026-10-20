@@ -132,14 +132,36 @@ if (Configure::read('MISP.baseurl')) {
 CakePlugin::load('SysLog');
 CakePlugin::load('Assets'); // having Logable
 CakePlugin::load('SysLogLogable');
-CakePlugin::load('UrlCache');
 
 /**
  * Uncomment the following line to enable client SSL certificate authentication.
  * It's also necessary to configure the plugin — for more information, please read app/Plugin/CertAuth/reame.md
  */
-// CakePlugin::load('CertAuth');
-// CakePlugin::load('ShibbAuth');
+
+if (Configure::read('AadAuth')) {
+	CakePlugin::load('AadAuth');
+}
+
+if (Configure::read('CertAuth')) {
+	CakePlugin::load('CertAuth');
+}
+
+if (Configure::read('LdapAuth')) {
+	CakePlugin::load('LdapAuth');
+}
+
+if (Configure::read('LinOTPAuth')) {
+	CakePlugin::load('LinOTPAuth');
+}
+
+if (Configure::read('OidcAuth')) {
+	CakePlugin::load('OidcAuth');
+}
+
+if (Configure::read('ShibbAuth') || Configure::read('ApacheShibbAuth')) {
+	CakePlugin::load('ShibbAuth');
+}
+
 /**
  * You can attach event listeners to the request lifecyle as Dispatcher Filter . By Default CakePHP bundles two filters:
  *
@@ -180,3 +202,7 @@ CakeLog::config('error', array(
 CakePlugin::loadAll(array(
 	'CakeResque' => array('bootstrap' => true)
 ));
+
+
+// Enable the additional exception logging for certain failures (timeouts, out of memory, etc)
+Configure::write('Exception.renderer', 'AppExceptionRenderer');

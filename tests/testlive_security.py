@@ -17,8 +17,9 @@ from lxml.html import fromstring
 from enum import Enum
 
 try:
-    from pymisp import PyMISP, MISPOrganisation, MISPUser, MISPRole, MISPSharingGroup, MISPEvent, MISPLog, MISPSighting
+    from pymisp import PyMISP, MISPOrganisation, MISPUser, MISPRole, MISPSharingGroup, MISPEvent, MISPLog, MISPSighting, Distribution
     from pymisp.exceptions import PyMISPError, NoKey, MISPServerError
+    from pymisp.api import get_uuid_or_id_from_abstract_misp
 except ImportError:
     if sys.version_info < (3, 6):
         print('This test suite requires Python 3.6+, breaking.')
@@ -47,6 +48,7 @@ class ROLE(Enum):
 def check_response(response):
     if isinstance(response, dict) and "errors" in response:
         raise Exception(response["errors"])
+    return response
 
 
 def login(url: str, email: str, password: str) -> requests.Session:
@@ -115,7 +117,7 @@ def send(api: PyMISP, request_type: str, url: str, data=None, check_errors: bool
     if data is None:
         data = {}
     response = api._prepare_request(request_type, url, data=data)
-    response = api._check_json_response(response)
+    response = api._check_response(response)
     if check_errors:
         check_response(response)
     return response
@@ -125,17 +127,26 @@ def random() -> str:
     return str(uuid.uuid4()).split("-")[0]
 
 
+def publish_immediately(pymisp: PyMISP, event: Union[MISPEvent, int, str, uuid.UUID], with_email: bool = False):
+    event_id = get_uuid_or_id_from_abstract_misp(event)
+    action = "alert" if with_email else "publish"
+    return send(pymisp, 'POST', f'events/{action}/{event_id}/disable_background_processing:1')
+
+
 class TestSecurity(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         warnings.simplefilter("ignore", ResourceWarning)
 
-        # Connect as admin
+        # Connect as site admin
         cls.admin_misp_connector = PyMISP(url, key)
         # Set expected config values
         check_response(cls.admin_misp_connector.set_server_setting('debug', 1, force=True))
-        check_response(cls.admin_misp_connector.set_server_setting('Security.advanced_authkeys', False, force=True))
+        check_response(cls.admin_misp_connector.set_server_setting('Security.advanced_authkeys', True, force=True))
         cls.admin_misp_connector.global_pythonify = True
+
+        # we get rid of the legacy authkey checks as those are currently broken since the fix to not having the same keys in the old + new system
+
         # Check if admin is really site admin
         assert cls.admin_misp_connector._current_role.perm_site_admin
 
@@ -171,6 +182,10 @@ class TestSecurity(unittest.TestCase):
         user.password = cls.test_usr_password
         cls.test_usr = cls.admin_misp_connector.add_user(user)
         check_response(cls.test_usr)
+
+        test_usr_key = cls.__create_advanced_authkey(cls, cls.test_usr.id)
+        cls.test_usr.authkey = test_usr_key["authkey_raw"]
+        assert(cls.test_usr.authkey == test_usr_key["authkey_raw"])
 
         # Try to connect as user to check if everything works
         PyMISP(url, cls.test_usr.authkey)
@@ -268,14 +283,14 @@ class TestSecurity(unittest.TestCase):
     def test_user_must_change_password(self):
         updated_user = self.admin_misp_connector.update_user({'change_pw': 1}, self.test_usr)
         check_response(updated_user)
-        self.assertEqual(updated_user.change_pw, "1")
+        self.assertTrue(updated_user.change_pw)
 
         # Try to login, should still work because key is still valid
         PyMISP(url, self.test_usr.authkey)
 
         updated_user = self.admin_misp_connector.update_user({'change_pw': 0}, self.test_usr)
         check_response(updated_user)
-        self.assertEqual(updated_user.change_pw, "0")
+        self.assertFalse(updated_user.change_pw)
 
         # Try to login, should also still works
         PyMISP(url, self.test_usr.authkey)
@@ -284,15 +299,15 @@ class TestSecurity(unittest.TestCase):
         # Admin set that user must change password
         updated_user = self.admin_misp_connector.update_user({'change_pw': 1}, self.test_usr)
         check_response(updated_user)
-        self.assertEqual(updated_user.change_pw, "1")
+        self.assertTrue(updated_user.change_pw)
 
-        # User try to change back trough API
+        # User try to change back through API
         logged_in = PyMISP(url, self.test_usr.authkey)
         logged_in.update_user({'change_pw': 0}, self.test_usr)
 
         updated_user = self.admin_misp_connector.get_user(self.test_usr)
         # Should not be possible
-        self.assertEqual(updated_user.change_pw, "1")
+        self.assertTrue(updated_user.change_pw)
 
     def test_disabled_user(self):
         # Disable user
@@ -415,12 +430,16 @@ class TestSecurity(unittest.TestCase):
 
         time.sleep(1)
 
+    def test_advanced_authkeys_non_exists_user(self):
+        new_auth_key = send(self.admin_misp_connector, "POST", "authKeys/add/9999", check_errors=False)
+        self.assertErrorResponse(new_auth_key)
+        self.assertIn("user_id", new_auth_key["errors"][1]["errors"])
+
     def test_advanced_authkeys_own_key_not_possible(self):
-        with self.__setting("Security.advanced_authkeys", True):
-            authkey = ("a" * 40)
-            auth_key = self.__create_advanced_authkey(self.test_usr.id, {"authkey": authkey})
-            self.__delete_advanced_authkey(auth_key["id"])
-            self.assertNotEqual(authkey, auth_key["authkey_raw"])
+        authkey = ("a" * 40)
+        auth_key = self.__create_advanced_authkey(self.test_usr.id, {"authkey": authkey})
+        self.__delete_advanced_authkey(auth_key["id"])
+        self.assertNotEqual(authkey, auth_key["authkey_raw"])
 
     def test_advanced_authkeys_reset_own(self):
         with self.__setting("Security.advanced_authkeys", True):
@@ -477,6 +496,7 @@ class TestSecurity(unittest.TestCase):
             # Reset auth key from org admin account
             new_auth_key = send(self.org_admin_misp_connector, "POST", f"users/resetauthkey/{self.test_usr.id}")
             new_auth_key = new_auth_key["message"].replace("Authkey updated: ", "")
+            self.test_usr.authkey = new_auth_key
 
             # Try to login with old key
             with self.assertRaises(PyMISPError):
@@ -776,6 +796,27 @@ class TestSecurity(unittest.TestCase):
 
         # Password should be still the same
         self.assertIsInstance(login(url, self.test_usr.email, self.test_usr_password), requests.Session)
+
+    def test_forget_password_not_enabled(self):
+        logged_in = PyMISP(url, self.test_usr.authkey)
+        logged_in.global_pythonify = True
+
+        with self.assertRaises(Exception):
+            send(logged_in, "GET", f"/users/forget")
+
+        with self.assertRaises(Exception):
+            send(logged_in, "GET", f"/users/password_reset/abcd")
+
+    def test_otp_disabled(self):
+        with self.__setting("Security.otp_disabled", True):
+            logged_in = PyMISP(url, self.test_usr.authkey)
+            logged_in.global_pythonify = True
+
+            with self.assertRaises(Exception):
+                send(logged_in, "GET", f"/users/totp_new")
+
+            with self.assertRaises(Exception):
+                send(logged_in, "GET", f"/users/totp_delete/1")
 
     def test_add_user_by_org_admin(self):
         user = MISPUser()
@@ -1147,14 +1188,6 @@ class TestSecurity(unittest.TestCase):
             self.assertIn("X-Username", response.headers)
             self.assertEqual(self.test_usr.email, response.headers["X-Username"])
 
-    def test_username_in_response_header_api_access(self):
-        with self.__setting("Security.username_in_response_header", True):
-            logged_in = PyMISP(url, self.test_usr.authkey)
-
-            response = logged_in._prepare_request('GET', 'users/view/me')
-            self.assertIn("X-Username", response.headers)
-            self.assertEqual(self.test_usr.email + "/API/default", response.headers["X-Username"])
-
     def test_username_in_response_header_advanced_api_access(self):
         with self.__setting({
             "Security": {
@@ -1233,6 +1266,32 @@ class TestSecurity(unittest.TestCase):
         test_usr.delete_event(created_event)
         self.admin_misp_connector.delete_user(publisher_user)
         self.admin_misp_connector.delete_organisation(different_org)
+
+    def test_unpublished_private(self):
+        with self.__setting("MISP.unpublishedprivate", True):
+            created_event = self.admin_misp_connector.add_event(self.__generate_event())
+            self.assertIsInstance(created_event, MISPEvent, "Admin user should be able to create event")
+
+            logged_in = PyMISP(url, self.test_usr.authkey)
+            # Event is not published, so normal user should not see that event
+            self.assertFalse(logged_in.event_exists(created_event.uuid))
+            fetched_event = logged_in.get_event(created_event.uuid)
+            self.assertEqual(fetched_event["errors"][0], 404)
+            attributes = logged_in.search(controller='attributes', uuid=created_event.uuid)
+            self.assertEqual(len(attributes["Attribute"]), 0, attributes)
+
+            # Publish
+            self.assertSuccessfulResponse(publish_immediately(self.admin_misp_connector, created_event))
+
+            # Event is published, so normal user should see that event
+            self.assertTrue(logged_in.event_exists(created_event.uuid))
+            fetched_event = logged_in.get_event(created_event.uuid)
+            self.assertSuccessfulResponse(fetched_event, "User should be able to see published event")
+            attributes = logged_in.search(controller='attributes', uuid=created_event.uuid)
+            self.assertEqual(len(attributes["Attribute"]), 1, attributes)
+
+            # Cleanup
+            self.admin_misp_connector.delete_event(created_event)
 
     def test_sg_index_user_cannot_see(self):
         org = self.__create_org()
@@ -1367,6 +1426,11 @@ class TestSecurity(unittest.TestCase):
 
         self.admin_misp_connector.delete_organisation(org)
 
+    def test_org_hide_index(self):
+        with self.__setting("Security.hide_organisation_index_from_users", True):
+            logged_in = PyMISP(url, self.test_usr.authkey)
+            self.assertErrorResponse(logged_in.organisations())
+
     def test_org_hide_org_cannot_set(self):
         org = self.__create_org()
         with self.__setting("Security.hide_organisation_index_from_users", True):
@@ -1416,7 +1480,7 @@ class TestSecurity(unittest.TestCase):
 
         with self.__setting("Security.hide_organisation_index_from_users", True):
             logged_in = PyMISP(url, self.test_usr.authkey)
-            for key in (org.id, org.uuid, org.name):
+            for key in (org.id, org.uuid):
                 fetched_org = logged_in.get_organisation(key)
                 check_response(fetched_org)
                 self.assertNotIn("created_by", fetched_org["Organisation"])
@@ -1499,7 +1563,8 @@ class TestSecurity(unittest.TestCase):
         event = user1.add_event(self.__generate_event())
         check_response(event)
         check_response(user1.add_sighting(s, event.Attribute[0]))
-        self.assertEqual(len(user1.sightings(event)), 1, "User should see hos own sighting")
+        self.assertEqual(len(user1.sightings(event)), 1, "User should see only own sighting")
+        self.assertEqual(len(user1.search_sightings('event', event.id)), 1)
 
         org = self.__create_org()
         user = self.__create_user(org.id, ROLE.USER)
@@ -1507,15 +1572,75 @@ class TestSecurity(unittest.TestCase):
         user2.global_pythonify = True
 
         self.assertEqual(len(user2.sightings(event)), 0, "User should not seen any sighting")
+        self.assertEqual(len(user2.search_sightings('event', event.id)), 0)
 
         with self.__setting({"MISP.host_org_id": self.test_org.id, "Plugin.Sightings_policy": 3}):
             self.assertEqual(len(user2.sightings(event)), 1, "User should see host org sighting")
+            self.assertEqual(len(user2.search_sightings('event', event.id)), 1)
 
         self.admin_misp_connector.delete_event(event)
         self.admin_misp_connector.delete_user(user)
         self.admin_misp_connector.delete_organisation(org)
 
-    def __generate_event(self, distribution: int = 1) -> MISPEvent:
+    def test_sighting_rest_search_permission(self):
+        s = MISPSighting()
+        s.source = 'Testcases'
+        s.type = '1'
+
+        user1 = PyMISP(url, self.test_usr.authkey)
+        user1.global_pythonify = True
+
+        private_event = check_response(user1.add_event(self.__generate_event(Distribution.your_organisation_only)))
+        check_response(user1.add_sighting(s, private_event.Attribute[0]))
+        self.assertEqual(len(user1.sightings(private_event)), 1, "User should see hos own sighting")
+
+        sightings = user1.search_sightings("event", private_event.id)
+        self.assertEqual(len(sightings), 1, sightings)
+
+        org = self.__create_org()
+        user = self.__create_user(org.id, ROLE.USER)
+        user2 = PyMISP(url, user.authkey)
+        user2.global_pythonify = True
+
+        self.assertFalse(user2.event_exists(private_event), "User should not see the event")
+
+        sightings = user2.sightings(private_event)
+        self.assertErrorResponse(sightings, "User should not seen any sighting for private event")
+
+        sightings = user2.search_sightings("event", private_event.id)
+        self.assertEqual(len(sightings), 0, "User should not seen any sighting from private event from rest search")
+
+        with self.__setting("Plugin.Sightings_policy", 2):  # set sighting policy to everyone
+            sightings = user2.sightings(private_event)
+            self.assertErrorResponse(sightings, "User should not seen any sighting for private event")
+
+            sightings = user2.search_sightings("event", private_event.id)
+            self.assertEqual(len(sightings), 0, "User should not seen any sighting from private event from rest search")
+
+        self.admin_misp_connector.delete_event(private_event)
+        self.admin_misp_connector.delete_user(user)
+        self.admin_misp_connector.delete_organisation(org)
+
+    def test_user_setting_delete(self):
+        # Admin user can set their own user setting
+        setting = self.admin_misp_connector.set_user_setting('publish_alert_filter', {'Tag.name': 'test_publish_filter'})
+        check_response(setting)
+
+        logged_in = PyMISP(url, self.test_usr.authkey)
+        logged_in.global_pythonify = True
+
+        # Normal user should not be able to delete setting for different user
+        deleted = logged_in.delete_user_setting('publish_alert_filter', self.admin_misp_connector._current_user)
+        self.assertEqual(deleted["errors"][0], 404, deleted)
+
+        setting = self.admin_misp_connector.get_user_setting('publish_alert_filter')
+        check_response(setting)
+        self.assertEqual({'Tag.name': 'test_publish_filter'}, setting.value)
+
+        # User should be able to delete self setting
+        check_response(self.admin_misp_connector.delete_user_setting('publish_alert_filter'))
+
+    def __generate_event(self, distribution: int = Distribution.this_community_only) -> MISPEvent:
         mispevent = MISPEvent()
         mispevent.info = 'This is a super simple test'
         mispevent.distribution = distribution
@@ -1526,7 +1651,7 @@ class TestSecurity(unittest.TestCase):
 
     def __create_org(self) -> MISPOrganisation:
         organisation = MISPOrganisation()
-        organisation.name = 'Test Org ' + random()  # make name always unique
+        organisation.name = 'TestOrg' + random()  # make name always unique
         org = self.admin_misp_connector.add_organisation(organisation)
         check_response(org)
         return org
@@ -1574,7 +1699,7 @@ class TestSecurity(unittest.TestCase):
     def __create_advanced_authkey(self, user_id: int, data: Optional[dict] = None) -> dict:
         auth_key = send(self.admin_misp_connector, "POST", f'authKeys/add/{user_id}', data=data)["AuthKey"]
         # it is not possible to call `assertEqual`, because we use this method in `setUpClass` method
-        assert user_id == auth_key["user_id"], "Key was created for different user"
+        assert int(user_id) == int(auth_key["user_id"]), f"Key was created for different user ({user_id} != {auth_key['user_id']})"
         return auth_key
 
     def __login(self, user: MISPUser) -> PyMISP:

@@ -5,17 +5,30 @@ import json
 import sys
 from pathlib import Path
 
-_current_path = Path(__file__).resolve().parent
-sys.path.insert(0, str(_current_path / 'cti-python-stix2'))
-sys.path.insert(1, str(_current_path / 'python-stix'))
-sys.path.insert(2, str(_current_path / 'python-cybox'))
-sys.path.insert(3, str(_current_path / 'mixbox'))
-sys.path.insert(4, str(_current_path / 'misp-stix'))
-from misp_stix_converter import stix1_framing, stix20_framing, stix21_framing
+import importlib
+MODULE_TO_DIRECTORY = {
+    "stix2": "cti-python-stix2",
+    "stix": "python-stix",
+    "cybox": "python-cybox",
+    "mixbox": "mixbox",
+    "misp_stix_converter": "misp-stix",
+    "maec": "python-maec",
+}
+_CURRENT_PATH = Path(__file__).resolve().parent
+_CURRENT_PATH_IDX = 0
+for module_name, dir_path in MODULE_TO_DIRECTORY.items():
+    try:
+        importlib.import_module(module_name)
+    except ImportError:
+        sys.path.insert(_CURRENT_PATH_IDX, str(_CURRENT_PATH / dir_path))
+        _CURRENT_PATH_IDX += 1
+from misp_stix_converter.tools import (
+    stix1_attributes_framing, stix1_framing, stix20_framing, stix21_framing)
 
 
 def stix_framing(args: argparse.Namespace) -> dict:
-    header, separator, footer = stix1_framing(args.namespace, args.orgname, args.format, args.version)
+    arguments = (args.namespace, args.orgname, args.format, args.version)
+    header, separator, footer = stix1_framing(*arguments) if args.scope == 'Event' else stix1_attributes_framing(*arguments)
     return {'header': header, 'separator': separator, 'footer': footer}
 
 
@@ -29,6 +42,7 @@ if __name__ == "__main__":
     subparsers = parser.add_subparsers()
 
     stix1_parser = subparsers.add_parser('stix1', help='STIX1 framing.')
+    stix1_parser.add_argument('-s', '--scope', default='Event', choices=['Attribute', 'Event'], help='Scope: which kind of data is exported.')
     stix1_parser.add_argument('-v', '--version', default='1.1.1', choices=['1.1.1', '1.2'], help='STIX1 version (1.1.1 or 1.2).')
     stix1_parser.add_argument('-f', '--format', default='xml', choices=['json', 'xml'], help='Return format (xml or json).')
     stix1_parser.add_argument('-n', '--namespace', default='https://misp-project.org', help='Default namespace to include in the namespaces defined in the STIX header.')

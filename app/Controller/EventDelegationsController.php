@@ -53,18 +53,29 @@ class EventDelegationsController extends AppController
             if (empty($this->request->data['EventDelegation'])) {
                 $this->request->data = array('EventDelegation' => $this->request->data);
             }
-            if (empty($this->request->data['EventDelegation']['distribution'])) {
-                $this->request->data['EventDelegation']['distribution'] = 0;
-            }
-            if ($this->request->data['EventDelegation']['distribution'] != 4) {
-                $this->request->data['EventDelegation']['sharing_group_id'] = '0';
-            }
-            $this->request->data['EventDelegation']['event_id'] = $event['Event']['id'];
-            $this->request->data['EventDelegation']['requester_org_id'] = $this->Auth->user('org_id');
-            $org_id = $this->Toolbox->findIdByUuid($this->EventDelegation->Event->Org, $this->request->data['EventDelegation']['org_id']);
-            $this->request->data['EventDelegation']['org_id'] = $org_id;
+            $submitted = $this->request->data['EventDelegation'];
+            $distribution = empty($submitted['distribution']) ? 0 : $submitted['distribution'];
+            $org_id = $this->Toolbox->findIdByUuid(
+                $this->EventDelegation->Event->Org,
+                isset($submitted['org_id']) ? $submitted['org_id'] : null
+            );
+            // Build the row from an allow-list instead of saving what was submitted. The checks
+            // above authorise only the event named in the URL, so any caller-supplied primary key
+            // or event_id that reaches the save retargets it at another organisation's delegation
+            // - and because a delegation row grants its org read access to the event it names
+            // (Event::fetchEvent), that is a read grant over any event on the instance.
+            $delegation = array(
+                'event_id' => $event['Event']['id'],
+                'requester_org_id' => $this->Auth->user('org_id'),
+                'org_id' => $org_id,
+                'message' => isset($submitted['message']) ? $submitted['message'] : '',
+                'distribution' => $distribution,
+                'sharing_group_id' => ($distribution == 4 && !empty($submitted['sharing_group_id']))
+                    ? $submitted['sharing_group_id']
+                    : '0',
+            );
             $this->EventDelegation->create();
-            $result = $this->EventDelegation->save($this->request->data['EventDelegation']);
+            $result = $this->EventDelegation->save(array('EventDelegation' => $delegation));
             $org = $this->EventDelegation->Event->Org->find('first', array(
                     'conditions' => array('id' => $org_id),
                     'recursive' => -1,
@@ -73,7 +84,7 @@ class EventDelegationsController extends AppController
             $this->Log = ClassRegistry::init('Log');
             $this->Log->create();
             if (empty($result)) {
-                $this->Log->save(array(
+                $this->Log->saveOrFailSilently(array(
                         'org' => $this->Auth->user('Organisation')['name'],
                         'model' => 'Event',
                         'model_id' => $event['Event']['id'],
@@ -85,7 +96,7 @@ class EventDelegationsController extends AppController
                 ));
                 throw new InvalidArgumentException('Invalid input, could not create the Delegation Request.');
             }
-            $this->Log->save(array(
+            $this->Log->saveOrFailSilently(array(
                     'org' => $this->Auth->user('Organisation')['name'],
                     'model' => 'Event',
                     'model_id' => $event['Event']['id'],
@@ -150,7 +161,7 @@ class EventDelegationsController extends AppController
         if ($this->request->is('post')) {
             $this->Log = ClassRegistry::init('Log');
             $this->Log->create();
-            $this->Log->save(array(
+            $this->Log->saveOrFailSilently(array(
                     'org' => $this->Auth->user('Organisation')['name'],
                     'model' => 'Event',
                     'model_id' => $delegation['Event']['id'],
@@ -164,7 +175,7 @@ class EventDelegationsController extends AppController
             $this->EventDelegation->delete($delegation['EventDelegation']['id']);
             if ($result) {
                 $this->Log->create();
-                $this->Log->save(array(
+                $this->Log->saveOrFailSilently(array(
                         'org' => $this->Auth->user('Organisation')['name'],
                         'model' => 'Event',
                         'model_id' => 0,

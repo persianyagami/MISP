@@ -1,6 +1,6 @@
 <div class="attribute_replace">
 <?php
-echo $this->Form->create('Attribute', array('id', 'url' => $baseurl . '/attributes/attributeReplace/' . $event_id));
+echo $this->Form->create('Attribute', array('id', 'url' => $baseurl . '/attributes/attributeReplace/' . h($event_id)));
 ?>
     <fieldset>
         <legend><?php echo __('Attribute Replace Tool'); ?></legend>
@@ -25,7 +25,7 @@ echo $this->Form->create('Attribute', array('id', 'url' => $baseurl . '/attribut
                     'class' => 'input-xxlarge',
                     'label' => __('Values')
             ));
-            $this->Js->get('#AttributeCategory')->event('change', 'formCategoryChanged("#AttributeCategory")');
+            $this->Js->get('#AttributeCategory')->event('change', 'formCategoryChanged()');
             ?>
             <div class="input clear"></div>
         </div>
@@ -35,7 +35,7 @@ echo $this->Form->create('Attribute', array('id', 'url' => $baseurl . '/attribut
             <table>
                 <tr>
                 <td style="vertical-align:top">
-                    <span id="submitButton" class="btn btn-primary" title="<?php echo __('Replace attributes'); ?>" role="button" tabindex="0" aria-label="<?php echo __('Replaceattributes'); ?>" onClick="submitPopoverForm('<?php echo $event_id;?>', 'replaceAttributes')"><?php echo __('Submit'); ?></span>
+                    <span id="submitButton" class="btn btn-primary" title="<?php echo __('Replace attributes'); ?>" role="button" tabindex="0" aria-label="<?php echo __('Replaceattributes'); ?>" onClick="submitPopoverForm('<?php echo h($event_id);?>', 'replaceAttributes')"><?php echo __('Submit'); ?></span>
                 </td>
                 <td style="width:540px;">
                     <p style="color:red;font-weight:bold;display:none;text-align:center" id="warning-message"><?php echo __('Warning: You are about to share data that is of a classified nature (Attribution / targeting data). Make sure that you are authorised to share this.'); ?></p>
@@ -51,30 +51,20 @@ echo $this->Form->create('Attribute', array('id', 'url' => $baseurl . '/attribut
     ?>
 </div>
 
-<script type="text/javascript">
+<script>
 //
 //Generate Category / Type filtering array
 //
-var category_type_mapping = new Array();
-<?php
-foreach ($categoryDefinitions as $category => $def) {
-    echo "category_type_mapping['" . addslashes($category) . "'] = {";
-    $first = true;
-    foreach ($def['types'] as $type) {
-        if ($first) $first = false;
-        else echo ', ';
-        echo "'" . addslashes($type) . "' : '" . addslashes($type) . "'";
-    }
-    echo "}; \n";
-}
-?>
+var category_type_mapping = <?= json_encode(array_map(function(array $value) {
+    return $value['types'];
+}, $categoryDefinitions)); ?>;
 
-function formCategoryChanged(id) {
+function formCategoryChanged() {
     // fill in the types
     var options = $('#AttributeType').prop('options');
     $('option', $('#AttributeType')).remove();
-    $.each(category_type_mapping[$('#AttributeCategory').val()], function(val, text) {
-        options[options.length] = new Option(text, val);
+    $.each(category_type_mapping[$('#AttributeCategory').val()], function(index, val) {
+        options.add(new Option(val, val));
     });
     // enable the form element
     $('#AttributeType').prop('disabled', false);

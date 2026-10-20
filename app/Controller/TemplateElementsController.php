@@ -4,7 +4,7 @@ App::uses('AppController', 'Controller');
 
 class TemplateElementsController extends AppController
 {
-    public $components = array('Security' ,'RequestHandler');
+    public $components = array('RequestHandler');
 
     public $paginate = array(
             'limit' => 50,
@@ -38,7 +38,7 @@ class TemplateElementsController extends AppController
         $this->loadModel('Attribute');
         $this->set('validTypeGroups', $this->Attribute->validTypeGroups);
         $this->set('id', $id);
-        $this->layout = 'ajaxTemplate';
+        $this->layout = false;
         $this->set('elements', $templateElements);
         $mayModify = false;
         if ($this->_isSiteAdmin() || $template['Template']['org'] == $this->Auth->user('Organisation')['name']) {
@@ -50,6 +50,7 @@ class TemplateElementsController extends AppController
 
     public function templateElementAddChoices($id)
     {
+        $id = intval($id);
         if (!$this->_isSiteAdmin() && !$this->TemplateElement->Template->checkAuthorisation($id, $this->Auth->user(), true)) {
             throw new MethodNotAllowedException('You are not authorised to do that.');
         }
@@ -57,13 +58,14 @@ class TemplateElementsController extends AppController
             throw new MethodNotAllowedException('This action is for ajax requests only.');
         }
         $this->set('id', $id);
-        $this->layout = 'ajax';
+        $this->layout = false;
         $this->render('ajax/template_element_add_choices');
     }
 
     public function add($type, $id)
     {
         $ModelType = 'TemplateElement' . ucfirst($type);
+        $id = intval($id);
         if (!$this->_isSiteAdmin() && !$this->TemplateElement->Template->checkAuthorisation($id, $this->Auth->user(), true)) {
             return new CakeResponse(array('body'=> json_encode(array('saved' => false, 'errors' => 'You are not authorised to do that.')), 'status' => 200, 'type' => 'json'));
         }
@@ -116,7 +118,7 @@ class TemplateElementsController extends AppController
                 $this->set('categoryArray', $categoryArray);
                 $this->set('categories', $categories);
             }
-            $this->layout = 'ajaxTemplate';
+            $this->layout = false;
             $this->render('ajax/template_element_add_' . $type);
         } elseif ($this->request->is('post')) {
             $pos = $this->TemplateElement->lastPosition($id);
@@ -131,6 +133,11 @@ class TemplateElementsController extends AppController
             $errorMessage = 'The element could not be added.';
             if ($this->TemplateElement->save($templateElement)) {
                 $this->request->data[$ModelType]['template_element_id'] = $this->TemplateElement->id;
+                // Mass-assignment guard (backport of 3ff6bd9cf): create() does not strip a
+                // supplied id, so an injected TemplateElement<Type>[id] would covertly UPDATE
+                // (re-parent via the forced template_element_id + overwrite) an arbitrary element
+                // row in another org's template. This is always a NEW sub-element, so strip id.
+                unset($this->request->data[$ModelType]['id']);
                 $this->TemplateElement->$ModelType->create();
                 if ($this->TemplateElement->$ModelType->save($this->request->data)) {
                     return new CakeResponse(array('body'=> json_encode(array('saved' => true, 'success' => 'Element successfully added to template.')), 'status' => 200, 'type' => 'json'));
@@ -147,13 +154,20 @@ class TemplateElementsController extends AppController
 
     public function edit($type, $id)
     {
+        $id = intval($id);
         $ModelType = 'TemplateElement' . ucfirst($type);
         $templateElement = $this->TemplateElement->find('first', array(
             'conditions' => array('TemplateElement.id' => $id),
             'contain' => array('Template', $ModelType)
         ));
         $this->set('template_id', $templateElement['Template']['id']);
-        if (!$this->_isSiteAdmin() && !$this->TemplateElement->Template->checkAuthorisation($id, $this->Auth->user(), true)) {
+        // DPT-5: authorise against the element's STORED parent template,
+        // not a template whose id happens to equal the element id. $id is
+        // the TemplateElement id; checkAuthorisation() expects a Template
+        // id, so the bare call gated on the wrong entity, letting a
+        // perm_template user edit another org's element when they own a
+        // template with the same id. Mirror editV2() which uses template_id.
+        if (!$this->_isSiteAdmin() && !$this->TemplateElement->Template->checkAuthorisation($templateElement['Template']['id'], $this->Auth->user(), true)) {
             return new CakeResponse(array('body'=> json_encode(array('saved' => false, 'errors' => 'You are not authorised to do that.')), 'status' => 200, 'type' => 'json'));
         }
         if (!$this->request->is('ajax')) {
@@ -210,7 +224,7 @@ class TemplateElementsController extends AppController
                 $this->set('categoryArray', $categoryArray);
                 $this->set('categories', $categories);
             }
-            $this->layout = 'ajaxTemplate';
+            $this->layout = false;
             $this->render('ajax/template_element_edit_' . $type);
         } elseif ($this->request->is('post') || $this->request->is('put')) {
             $this->request->data[$ModelType]['id'] = $templateElement[$ModelType][0]['id'];
@@ -227,6 +241,7 @@ class TemplateElementsController extends AppController
 
     public function delete($id)
     {
+        $id = intval($id);
         if (!$this->request->is('ajax')) {
             throw new MethodNotAllowedException('This action is for ajax requests only.');
         }

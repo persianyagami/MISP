@@ -1,7 +1,7 @@
-<?php
-    echo $this->Html->script('d3');
-    echo $this->Html->script('cal-heatmap');
-    echo $this->Html->css('cal-heatmap');
+<?= $this->element('genericElements/assetLoader', [
+    'css' => ['cal-heatmap'],
+    'js' => ['d3', 'cal-heatmap'],
+]);
 ?>
 <div class = "index">
 <h2><?php echo __('Statistics');?></h2>
@@ -23,6 +23,23 @@
         </dd>
         <dt><?php echo __('Attributes / event'); ?></dt>
         <dd><?php echo h($stats['attributes_per_event']); ?>&nbsp;</dd>
+        <dt><?php echo __('Objects'); ?></dt>
+        <dd><?php echo h($stats['object_count']);
+            if ($stats['object_count_month']) echo ' <span style="color:green">(+' . h($stats['object_count_month']) . ')</span>&nbsp;';
+            else echo ' <span style="color:red">(0)</span>&nbsp;';?>
+        </dd>
+        <dt><?php echo __('Objects / event'); ?></dt>
+        <dd><?php echo h($stats['objects_per_event']); ?>&nbsp;</dd>
+        <dt><?php echo __('Event Reports'); ?></dt>
+        <dd><?php echo h($stats['eventreport_count']);
+            if ($stats['eventreport_count_month']) echo ' <span style="color:green">(+' . h($stats['eventreport_count_month']) . ')</span>&nbsp;';
+            else echo ' <span style="color:red">(0)</span>&nbsp;';?>
+        </dd>
+        <dt><?php echo __('Analyst Data'); ?></dt>
+        <dd><?php echo h($stats['analyst_data_count']);
+            if ($stats['analyst_data_count_month']) echo ' <span style="color:green">(+' . h($stats['analyst_data_count']) . ')</span>&nbsp;';
+            else echo ' <span style="color:red">(0)</span>&nbsp;';?>
+        </dd>
         <dt><?php echo __('Correlations found'); ?></dt>
         <dd><?php echo h($stats['correlation_count']); ?>&nbsp;</dd>
         <dt><?php echo __('Proposals active'); ?></dt>

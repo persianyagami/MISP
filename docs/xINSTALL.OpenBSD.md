@@ -1,5 +1,5 @@
-# INSTALLATION INSTRUCTIONS
-## for OpenBSD 6.9-amd64
+# INSTALLATION INSTRUCTIONS!}
+## for OpenBSD 7.0-amd64
 
 !!! warning
     This is not fully working yet. Mostly it is a template for our ongoing documentation efforts :spider:
@@ -13,15 +13,10 @@
 !!! notice
     This guide attempts to offer native httpd or apache2/nginx.
 
-!!! warning
-    As of 20181018 the native httpd server is NOT useable with MISP on OpenBSD 6.3.
-    Thus ONLY Apache 2.x available.
-    NO *rewrite* available, just yet. It will be in [the next release](https://marc.info/?l=openbsd-tech&m=152761257806283&w=2)
-
 !!! notice
     As of OpenBSD 6.4 the native httpd has rewrite rules and php 5.6 is gone too.
 
-{!generic/globalVariables.md!}
+{% include_relative generic/globalVariables.md %}
 
 ```bash
 export AUTOMAKE_VERSION=1.16
@@ -86,7 +81,7 @@ doas pkg_add -v mariadb-server
 #### Install misc dependencies
 
 ```bash
-doas pkg_add -v curl git python--%3.8 redis libmagic autoconf--%2.71 automake--%1.16 libtool unzip--iconv rust
+doas pkg_add -v curl git sqlite3 python--%3.9 redis libmagic autoconf--%2.71 automake--%1.16 libtool unzip--iconv rust
 ```
 
 ```bash
@@ -229,8 +224,8 @@ doas rcctl enable httpd
 #### Install Python virtualenv
 ```bash
 doas pkg_add -v py3-virtualenv py3-pip
-doas ln -sf /usr/local/bin/pip3.8 /usr/local/bin/pip
-doas ln -s /usr/local/bin/python3.8 /usr/local/bin/python
+doas ln -sf /usr/local/bin/pip3.9 /usr/local/bin/pip
+doas ln -s /usr/local/bin/python3.9 /usr/local/bin/python
 doas mkdir /usr/local/virtualenvs
 doas /usr/local/bin/virtualenv /usr/local/virtualenvs/MISP
 ```
@@ -358,20 +353,20 @@ cd /var/www/htdocs/MISP/app/files/scripts/python-maec
 $SUDO_WWW git config core.filemode false
 doas /usr/local/virtualenvs/MISP/bin/python setup.py install
 
-# install mixbox to accommodate the new STIX dependencies:
+# Install mixbox to accommodate the new STIX dependencies:
 cd /var/www/htdocs/MISP/app/files/scripts/mixbox
 $SUDO_WWW git config core.filemode false
 doas /usr/local/virtualenvs/MISP/bin/python setup.py install
 
-# install PyMISP
+# Install PyMISP
 cd /var/www/htdocs/MISP/PyMISP
 doas /usr/local/virtualenvs/MISP/bin/python setup.py install
 
-# install support for STIX 2.0
-cd /var/www/htdocs/MISP/cti-python-stix2
+# Install misp-stix
+cd /var/www/htdocs/MISP/app/files/scripts/misp-stix
 doas /usr/local/virtualenvs/MISP/bin/python setup.py install
 
-# install python-magic and pydeep
+# Install python-magic and pydeep
 doas /usr/local/virtualenvs/MISP/bin/pip install python-magic
 doas /usr/local/virtualenvs/MISP/bin/pip install git+https://github.com/kbandla/pydeep.git
 ```
@@ -599,9 +594,9 @@ doas vi /etc/rc.local
 ${SUDO_WWW} bash /var/www/htdocs/MISP/app/Console/worker/start.sh
 ``` 
 
-{!generic/INSTALL.done.md!}
+{% include_relative generic/INSTALL.done.md %}
 
-{!generic/recommended.actions.md!}
+{% include_relative generic/recommended.actions.md %}
 
 #### MISP Modules
 ```
@@ -678,7 +673,7 @@ doas $CAKE Admin setSetting "Plugin.Enrichment_dns_enabled" true
 doas $CAKE Admin setSetting "Plugin.Enrichment_services_url" "http://127.0.0.1"
 doas $CAKE Admin setSetting "Plugin.Enrichment_services_port" 6666
 
-# Enable Import modules set better timout
+# Enable Import modules set better timeout
 doas $CAKE Admin setSetting "Plugin.Import_services_enable" true
 doas $CAKE Admin setSetting "Plugin.Import_services_url" "http://127.0.0.1"
 doas $CAKE Admin setSetting "Plugin.Import_services_port" 6666
@@ -686,7 +681,7 @@ doas $CAKE Admin setSetting "Plugin.Import_timeout" 300
 doas $CAKE Admin setSetting "Plugin.Import_ocr_enabled" true
 doas $CAKE Admin setSetting "Plugin.Import_csvimport_enabled" true
 
-# Enable Export modules set better timout
+# Enable Export modules set better timeout
 doas $CAKE Admin setSetting "Plugin.Export_services_enable" true
 doas $CAKE Admin setSetting "Plugin.Export_services_url" "http://127.0.0.1"
 doas $CAKE Admin setSetting "Plugin.Export_services_port" 6666
@@ -921,4 +916,4 @@ doas $CAKE Admin setSetting "Plugin.ZeroMQ_tag_notifications_enable" false
 doas $CAKE Admin setSetting "Plugin.ZeroMQ_audit_notifications_enable" false
 ```
 
-{!generic/hardening.md!}
+{% include_relative generic/hardening.md %}

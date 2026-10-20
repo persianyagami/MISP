@@ -10,7 +10,7 @@
 ### 0/ WIP! You are warned, this does only partially work!
 ------------
 
-{!generic/globalVariables.md!}
+{% include_relative generic/globalVariables.md %}
 
 ```bash
 export AUTOMAKE_VERSION=1.16
@@ -456,9 +456,9 @@ sudo vi /etc/rc.local
 sudo -u www bash $PATH_TO_MISP/app/Console/worker/start.sh
 ``` 
 
-{!generic/INSTALL.done.md!}
+{% include_relative generic/INSTALL.done.md %}
 
-{!generic/recommended.actions.md!}
+{% include_relative generic/recommended.actions.md %}
 
 #### MISP Modules
 ```
@@ -529,7 +529,7 @@ sudo -u www $CAKE Admin setSetting "Plugin.Enrichment_dns_enabled" true
 sudo -u www $CAKE Admin setSetting "Plugin.Enrichment_services_url" "http://127.0.0.1"
 sudo -u www $CAKE Admin setSetting "Plugin.Enrichment_services_port" 6666
 
-# Enable Import modules set better timout
+# Enable Import modules set better timeout
 sudo -u www $CAKE Admin setSetting "Plugin.Import_services_enable" true
 sudo -u www $CAKE Admin setSetting "Plugin.Import_services_url" "http://127.0.0.1"
 sudo -u www $CAKE Admin setSetting "Plugin.Import_services_port" 6666
@@ -537,7 +537,7 @@ sudo -u www $CAKE Admin setSetting "Plugin.Import_timeout" 300
 sudo -u www $CAKE Admin setSetting "Plugin.Import_ocr_enabled" true
 sudo -u www $CAKE Admin setSetting "Plugin.Import_csvimport_enabled" true
 
-# Enable Export modules set better timout
+# Enable Export modules set better timeout
 sudo -u www $CAKE Admin setSetting "Plugin.Export_services_enable" true
 sudo -u www $CAKE Admin setSetting "Plugin.Export_services_url" "http://127.0.0.1"
 sudo -u www $CAKE Admin setSetting "Plugin.Export_services_port" 6666
@@ -771,4 +771,4 @@ sudo -u www $CAKE Admin setSetting "Plugin.ZeroMQ_tag_notifications_enable" fals
 sudo -u www $CAKE Admin setSetting "Plugin.ZeroMQ_audit_notifications_enable" false
 ```
 
-{!generic/hardening.md!}
+{% include_relative generic/hardening.md %}

@@ -9,6 +9,10 @@
         # Will be use latter on
         private $__related_events = array();
         private $__related_attributes = array();
+        # Feature not implemented yet.
+        # This is to let user configure a polling frequency. The idea is that it's not because we don't have data during a specific period that it means it should be considered as positive (or fp).
+        # For example, if we poll every Monday. If it was positive on week 1 and negative on week 2, the timeline will show that it was positive until monday on week 2, which is most probably incorrect as it might be actually negative on Wednesday.
+        private $extrapolateWithPollingFrequency = false;
 
         public function construct($eventModel, $user, $filterRules, $extended_view=0)
         {
@@ -53,6 +57,12 @@
                 $event['Attribute'] = array();
             }
 
+            if (!empty($fullevent[0]['Sighting'])) {
+                $event['Sighting'] = $fullevent[0]['Sighting'];
+            } else {
+                $event['Sighting'] = array();
+            }
+
             return $event;
         }
 
@@ -77,17 +87,25 @@
                 $attribute = array();
             }
 
+            $sightingsAttributeMap = [];
+            foreach ($event['Sighting'] as $sighting) {
+                $sightingsAttributeMap[$sighting['attribute_id']][] = $sighting['date_sighting'];
+            }
+
             // extract links and node type
             foreach ($attribute as $attr) {
                 $toPush = array(
                     'id' => $attr['id'],
                     'uuid' => $attr['uuid'],
-                    'content' => $attr['value'],
+                    'content' => h($attr['value']),
                     'event_id' => $attr['event_id'],
                     'group' => 'attribute',
                     'timestamp' => $attr['timestamp'],
                     'first_seen' => $attr['first_seen'],
                     'last_seen' => $attr['last_seen'],
+                    'attribute_type' => $attr['type'],
+                    'date_sighting' => $sightingsAttributeMap[$attr['id']] ?? [],
+                    'is_image' => $this->__eventModel->Attribute->isImage($attr),
                 );
                 $this->__json['items'][] = $toPush;
             }
@@ -96,9 +114,9 @@
                 $toPush_obj = array(
                     'id' => $obj['id'],
                     'uuid' => $obj['uuid'],
-                    'content' => $obj['name'],
+                    'content' => h($obj['name']),
                     'group' => 'object',
-                    'meta-category' => $obj['meta-category'],
+                    'meta-category' => h($obj['meta-category']),
                     'template_uuid' => $obj['template_uuid'],
                     'event_id' => $obj['event_id'],
                     'timestamp' => $obj['timestamp'],
@@ -122,11 +140,14 @@
                     $toPush_attr = array(
                         'id' => $obj_attr['id'],
                         'uuid' => $obj_attr['uuid'],
-                        'content' => $obj_attr['value'],
-                        'contentType' => $obj_attr['object_relation'],
+                        'content' => h($obj_attr['value']),
+                        'contentType' => h($obj_attr['object_relation']),
                         'event_id' => $obj_attr['event_id'],
                         'group' => 'object_attribute',
                         'timestamp' => $obj_attr['timestamp'],
+                        'attribute_type' => $obj_attr['type'],
+                        'date_sighting' => $sightingsAttributeMap[$obj_attr['id']] ?? [],
+                        'is_image' => $this->__eventModel->Attribute->isImage($obj_attr),
                     );
                     $toPush_obj['Attribute'][] = $toPush_attr;
                 }
@@ -147,7 +168,7 @@
                 'eventid' => $id,
                 'flatten' => 1,
                 'includeTagRelations' => 1,
-                'extended' => $this->__extended_view
+                'is_extended' => $this->__extended_view
             ));
             $this->__json['items'] = array();
 
@@ -168,26 +189,26 @@
                 $event['Sighting'][$k]['date_sighting'] *= 1000; // adapt to use micro
                 $regroupedSightings[$sighting['attribute_id']][] = &$event['Sighting'][$k];
             }
-            // make sure sightings are ordered
-            uksort($regroupedSightings, function ($a, $b) {
-                return $a['date_sighting'] > $b['date_sighting'];
-            });
             // generate extrapolation
             $now = time()*1000;
             foreach ($regroupedSightings as $attributeId => $sightings) {
+                usort($sightings, function ($a, $b) { // make sure sightings are ordered
+                    return $a['date_sighting'] > $b['date_sighting'];
+                });
                 $i = 0;
                 while ($i < count($sightings)) {
                     $sighting = $sightings[$i];
                     $attribute = $lookupAttribute[$attributeId];
                     $fpSightingIndex = $this->getNextFalsePositiveSightingIndex($sightings, $i+1);
+                    $group = $sighting['type'] == '1' ? 'sighting_negative' : 'sighting_positive';
                     if ($fpSightingIndex === false) { // No next FP, extrapolate to now
                         $this->__json['items'][] = array(
                             'attribute_id' => $attributeId,
                             'id' => sprintf('%s-%s', $attributeId, $sighting['id']),
                             'uuid' => $sighting['uuid'],
-                            'content' => $attribute['value'],
+                            'content' => h($attribute['value']),
                             'event_id' => $attribute['event_id'],
-                            'group' => 'sighting_positive',
+                            'group' => $group,
                             'timestamp' => $attribute['timestamp'],
                             'first_seen' => $sighting['date_sighting'],
                             'last_seen' => $now,
@@ -198,35 +219,47 @@
                         $pSightingIndex = $fpSightingIndex - 1;
                         $halfTime = 0;
                         if ($pSightingIndex == $i) {
-                            // we have only one positive sighting, thus the UP time should be take from a pooling frequence
+                            // we have only one positive sighting, thus the UP time should be take from a pooling frequence (feature not existing yet)
                             // for now, consider it UP only for half the time until the next FP
-                            $halfTime = ($sightings[$i+1]['date_sighting'] - $sighting['date_sighting'])/2;
+                            if ($this->extrapolateWithPollingFrequency) {
+                                $halfTime = ($sightings[$i+1]['date_sighting'] - $sighting['date_sighting'])/2;
+                            }
                         }
                         $pSighting = $sightings[$pSightingIndex];
+                        if ($this->extrapolateWithPollingFrequency) {
+                            $lastSeenPositive = $pSighting['date_sighting'] + $halfTime;
+                        } else {
+                            $lastSeenPositive = $sightings[$i+1]['date_sighting'];
+                        }
                         $this->__json['items'][] = array(
                             'attribute_id' => $attributeId,
                             'id' => sprintf('%s-%s', $attributeId, $sighting['id']),
                             'uuid' => $sighting['uuid'],
-                            'content' => $attribute['value'],
+                            'content' => h($attribute['value']),
                             'event_id' => $attribute['event_id'],
                             'group' => 'sighting_positive',
                             'timestamp' => $attribute['timestamp'],
                             'first_seen' => $sighting['date_sighting'],
-                            'last_seen' => $pSighting['date_sighting'] + $halfTime,
+                            'last_seen' => $lastSeenPositive,
                         );
                         // No next FP, extrapolate to now
                         $fpSighting = $sightings[$fpSightingIndex];
                         $secondNextPSightingIndex = $this->getNextPositiveSightingIndex($sightings, $fpSightingIndex+1);
                         if ($secondNextPSightingIndex === false) { // No next P, extrapolate to now
+                            if ($this->extrapolateWithPollingFrequency) {
+                                $firstSeenNegative = $fpSighting['date_sighting'] - $halfTime;
+                            } else {
+                                $firstSeenNegative = $fpSighting['date_sighting'];
+                            }
                             $this->__json['items'][] = array(
                                 'attribute_id' => $attributeId,
                                 'id' => sprintf('%s-%s', $attributeId, $sighting['id']),
-                                'uuid' => $sighting['uuid'],
-                                'content' => $attribute['value'],
+                                'uuid' => $fpSighting['uuid'],
+                                'content' => h($attribute['value']),
                                 'event_id' => $attribute['event_id'],
                                 'group' => 'sighting_negative',
                                 'timestamp' => $attribute['timestamp'],
-                                'first_seen' => $pSighting['date_sighting'] - $halfTime,
+                                'first_seen' => $firstSeenNegative,
                                 'last_seen' => $now,
                             );
                             break;
@@ -235,17 +268,22 @@
                                 $pSightingIndex = $pSightingIndex+1;
                                 $pSighting = $sightings[$pSightingIndex];
                             }
+                            if ($this->extrapolateWithPollingFrequency) {
+                                $firstSeenNegative = $fpSighting['date_sighting'] - $halfTime;
+                            } else {
+                                $firstSeenNegative = $fpSighting['date_sighting'];
+                            }
                             // set down until next postive
                             $secondNextPSighting = $sightings[$secondNextPSightingIndex];
                             $this->__json['items'][] = array(
                                 'attribute_id' => $attributeId,
                                 'id' => sprintf('%s-%s', $attributeId, $sighting['id']),
-                                'uuid' => $pSighting['uuid'],
-                                'content' => $attribute['value'],
+                                'uuid' => $fpSighting['uuid'],
+                                'content' => h($attribute['value']),
                                 'event_id' => $attribute['event_id'],
                                 'group' => 'sighting_negative',
                                 'timestamp' => $attribute['timestamp'],
-                                'first_seen' => $pSighting['date_sighting'] - $halfTime,
+                                'first_seen' => $firstSeenNegative,
                                 'last_seen' => $secondNextPSighting['date_sighting'],
                             );
                             $i = $secondNextPSightingIndex;

@@ -268,6 +268,7 @@
                     'label' => $attr['value'],
                     'event_id' => $attr['event_id'],
                     'node_type' => 'attribute',
+                    'comment' => $attr['comment'],
                 );
                 array_push($this->__json['items'], $toPush);
                 $this->__extendedEventUUIDMapping[$toPush['event_id']] = '';
@@ -285,6 +286,7 @@
                     'meta-category' => $obj['meta-category'],
                     'template_uuid' => $obj['template_uuid'],
                     'event_id' => $obj['event_id'],
+                    'comment' => $obj['comment'],
                 );
                 if (isset($obj['Attribute'])) {
                     $toPush['Attribute'] = $obj['Attribute'];
@@ -360,6 +362,7 @@
                     'label' => $attr['value'],
                     'event_id' => $attr['event_id'],
                     'node_type' => 'attribute',
+                    'comment' => $attr['comment'],
                 );
                 array_push($this->__json['items'], $toPush);
 
@@ -369,6 +372,8 @@
                         'id' => 'tag_edge_id_' . $i,
                         'from' => $attr['id'],
                         'to' => $tag['name'],
+                        'type' => isset($tag['relationship_type']) ? $tag['relationship_type'] : '',
+                        'comment' => '',
                     );
                     $tagSet[$tag['name']] = $tag;
                     array_push($this->__json['relations'], $toPush);
@@ -376,6 +381,7 @@
                 }
             }
 
+            $j = 0;
             foreach ($object as $obj) {
                 $toPush = array(
                     'id' => sprintf('o-%s', $obj['id']),
@@ -387,25 +393,47 @@
                     'meta-category' => $obj['meta-category'],
                     'template_uuid' => $obj['template_uuid'],
                     'event_id' => $obj['event_id'],
+                    'comment' => $obj['comment'],
                 );
                 array_push($this->__json['items'], $toPush);
-
-                // Record existing object_relation
-                foreach ($obj['Attribute'] as $attr) {
-                    $this->__json['existing_object_relation'][$attr['object_relation']] = 0; // set-alike
-                }
-
-                // get all tags in the Object's Attributes
+                
+                
+                // get all  attributes and tags in the Object's Attributes
                 $added_value = array();
                 foreach ($obj['Attribute'] as $ObjAttr) {
+                    // Record existing object_relation
+                    $this->__json['existing_object_relation'][$attr['object_relation']] = 0; // set-alike
                     $Tags = $ObjAttr['AttributeTag'];
                     foreach ($Tags as $tag) {
                         $tag = $tag['Tag'];
                         if (!in_array($tag['name'], $added_value)) {
                             $toPush = array(
-                                'id' => "tag_edge_id_" . $i,
+                                'id' => $ObjAttr['id'],
+                                'uuid' => $ObjAttr['uuid'],
+                                'type' => $ObjAttr['type'],
+                                'label' => $ObjAttr['value'],
+                                'event_id' => $ObjAttr['event_id'],
+                                'node_type' => 'attribute',
+                                'comment' => $ObjAttr['comment'],
+                            );
+                            array_push($this->__json['items'], $toPush);
+                            
+                            $toPush = array(
+                                'id' => 'obj_edge_id_' . $j,
                                 'from' => sprintf('o-%s', $obj['id']),
+                                'to' => $ObjAttr['id'],
+                                'type' => '',
+                                'comment' => '',
+                            );
+                            $j = $j + 1;
+                            array_push($this->__json['relations'], $toPush);
+
+                            $toPush = array(
+                                'id' => "tag_edge_id_" . $i,
+                                'from' => $ObjAttr['id'],
                                 'to' => $tag['name'],
+                                'type' => isset($tag['relationship_type']) ? $tag['relationship_type'] : '',
+                                'comment' => '',
                             );
                             $tagSet[$tag['name']] = $tag;
                             array_push($added_value, $tag['name']);
@@ -470,6 +498,7 @@
                     'label' => $attr['value'],
                     'event_id' => $attr['event_id'],
                     'node_type' => 'attribute',
+                    'comment' => $attr['comment'],
                 );
                 array_push($this->__json['items'], $toPush);
 
@@ -497,6 +526,7 @@
                     'meta-category' => $obj['meta-category'],
                     'template_uuid' => $obj['template_uuid'],
                     'event_id' => $obj['event_id'],
+                    'comment' => $obj['comment'],
                 );
                 array_push($this->__json['items'], $toPush);
 
@@ -522,6 +552,19 @@
                         $i = $i + 1;
                     }
                 }
+
+                foreach ($obj['ObjectReference'] as $rel) {
+                    $toPush = array(
+                        'id' => $rel['id'],
+                        'uuid' => $rel['uuid'],
+                        'from' => sprintf('o-%s', $obj['id']),
+                        'to' => $rel['referenced_type'] == 1 ? sprintf('o-%s', $rel['referenced_id']) : $rel['referenced_id'],
+                        'type' => $rel['relationship_type'],
+                        'comment' => $rel['comment'],
+                        'event_id' => $rel['event_id'],
+                    );
+                    array_push($this->__json['relations'], $toPush);
+                }
             }
 
             // Add KeyType as nodes
@@ -540,12 +583,22 @@
 
         public function get_reference_data($uuid)
         {
+            // object_references.uuid is unique, so this yields at most one row.
             $objectReference = $this->__refModel->ObjectReference->find('all', array(
                 'conditions' => array('ObjectReference.uuid' => $uuid, 'ObjectReference.deleted' => false),
                 'recursive' => -1,
-                //'fields' => array('ObjectReference.id', 'relationship_type', 'comment', 'referenced_uuid')
                 ));
             if (empty($objectReference)) {
+                throw new NotFoundException('Invalid object reference');
+            }
+            // Authorise through the object the reference hangs off, exactly as
+            // ObjectReferencesController::view() does. The full row is returned
+            // once the caller is allowed to see that object: the sole consumer,
+            // event-graph.js, reads object_id to build the edit popup.
+            $object = $this->__refModel->fetchObjectSimple($this->__user, array(
+                'conditions' => array('Object.id' => $objectReference[0]['ObjectReference']['object_id']),
+            ));
+            if (empty($object)) {
                 throw new NotFoundException('Invalid object reference');
             }
             return $objectReference;

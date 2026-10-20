@@ -7,7 +7,6 @@ App::uses('AppController', 'Controller');
 class AuthKeysController extends AppController
 {
     public $components = array(
-        'Security',
         'CRUD',
         'RequestHandler'
     );
@@ -15,17 +14,19 @@ class AuthKeysController extends AppController
     public $paginate = array(
         'limit' => 60,
         'order' => array(
-            'AuthKey.name' => 'ASC',
+            'AuthKey.id' => 'ASC',
         )
     );
 
-    public function index($id = false)
+    public function index($user_id = false)
     {
         $conditions = $this->__prepareConditions();
-        if ($id !== false) {
-            $this->set('user_id', $id);
-            $conditions['AND'][] = ['AuthKey.user_id' => $id];
+        $canCreateAuthkey = $user_id ? $this->AuthKey->canCreateAuthKeyForUser($this->Auth->user(), $user_id) : true;
+        if ($user_id) {
+            $this->set('user_id', $user_id);
+            $conditions['AND'][] = ['AuthKey.user_id' => $user_id];
         }
+        $this->set('canCreateAuthkey', $canCreateAuthkey);
         $keyUsageEnabled = Configure::read('MISP.log_user_ips') && Configure::read('MISP.log_user_ips_authkeys');
         $this->CRUD->index([
             'filters' => ['User.email', 'authkey_start', 'authkey_end', 'comment', 'User.id'],
@@ -61,6 +62,9 @@ class AuthKeysController extends AppController
 
     public function delete($id)
     {
+        if(!$this->AuthKey->canEditAuthKey($this->Auth->user(), $id)) {
+            throw new MethodNotAllowedException(__('Invalid user or insufficient privileges to interact with an authkey for the given user.'));
+        }
         $this->CRUD->delete($id, [
             'conditions' => $this->__prepareConditions(),
             'contain' => ['User'],
@@ -72,6 +76,9 @@ class AuthKeysController extends AppController
 
     public function edit($id)
     {
+        if(!$this->AuthKey->canEditAuthKey($this->Auth->user(), $id)) {
+            throw new MethodNotAllowedException(__('Invalid user or insufficient privileges to interact with an authkey for the given user.'));
+        }
         $this->CRUD->edit($id, [
             'conditions' => $this->__prepareConditions(),
             'afterFind' => function (array $authKey) {
@@ -88,10 +95,19 @@ class AuthKeysController extends AppController
         if ($this->IndexFilter->isRest()) {
             return $this->restResponsePayload;
         }
+        // Build the user dropdown from the authkey's actual owner, not from request->data:
+        // on a failed validation POST the latter reflects attacker-supplied input, which would
+        // let a user enumerate arbitrary user emails. Access to this owner is already authorised
+        // by the canEditAuthKey() check at the top of this action.
+        $ownerUserId = $this->AuthKey->find('column', [
+            'fields' => ['AuthKey.user_id'],
+            'conditions' => ['AuthKey.id' => $id],
+        ]);
+        $ownerUserId = $ownerUserId[0] ?? null;
         $this->set('dropdownData', [
             'user' => $this->User->find('list', [
                 'sort' => ['username' => 'asc'],
-                'conditions' => ['id' => $this->request->data['AuthKey']['user_id']],
+                'conditions' => ['id' => $ownerUserId],
             ])
         ]);
         $this->set('menuData', [
@@ -106,32 +122,42 @@ class AuthKeysController extends AppController
 
     public function add($user_id = false)
     {
+        $options = $this->IndexFilter->harvestParameters(['user_id']);
+        if (!empty($options['user_id'])) {
+            $user_id = $options['user_id'];
+        }
         $params = [
             'displayOnSuccess' => 'authkey_display',
-            'saveModelVariable' => ['authkey_raw'],
             'override' => ['authkey' => null], // do not allow to use own key, always generate random one
-            'afterFind' => function ($authKey) { // remove hashed key from response
+            'afterFind' => function (array $authKey, array $savedData) { // remove hashed key from response
                 unset($authKey['AuthKey']['authkey']);
+                $authKey['AuthKey']['authkey_raw'] = $savedData['AuthKey']['authkey_raw'];
                 return $authKey;
             }
         ];
+        if ($user_id === 'me' || $user_id === false) {
+            $user_id = $this->Auth->user('id');
+        }
         $selectConditions = [];
-        if (!$this->_isSiteAdmin()) {
+        if ($user_id) {
+            if ($this->AuthKey->canCreateAuthKeyForUser($this->Auth->user(), $user_id)) {
+                $selectConditions['AND'][] = ['User.id' => $user_id];
+                $params['override']['user_id'] = $user_id;
+            } else {
+                throw new MethodNotAllowedException(__('Invalid user or insufficient privileges to interact with an authkey for the given user.'));
+            }
+        } else {
             $selectConditions['AND'][] = ['User.id' => $this->Auth->user('id')];
-            $params['override']['user_id'] = $this->Auth->user('id');
-        } else if ($user_id) {
-            $selectConditions['AND'][] = ['User.id' => $user_id];
-            $params['override']['user_id'] = $user_id;
+            $params['override']['user_id'] = $this->Auth->user('id');        
         }
         $this->CRUD->add($params);
         if ($this->IndexFilter->isRest()) {
             return $this->restResponsePayload;
         }
-        $this->loadModel('User');
         $dropdownData = [
-            'user' => $this->User->find('list', [
+            'user' => $this->AuthKey->User->find('list', [
                 'sort' => ['username' => 'asc'],
-                'conditions' => $selectConditions
+                'conditions' => $selectConditions,
             ])
         ];
         $this->set(compact('dropdownData'));
@@ -171,6 +197,33 @@ class AuthKeysController extends AppController
         ]);
     }
 
+    public function pin($id, $ip) {
+        if(!$this->AuthKey->canEditAuthKey($this->Auth->user(), $id)) {
+            throw new MethodNotAllowedException(__('Invalid user or insufficient privileges to interact with an authkey for the given user.'));
+        }
+        if ($this->request->is('post')) {
+            // find entry, to confirm user is authorized
+            $conditions = $this->__prepareConditions();
+            $conditions['AND'][]['AuthKey.id'] = $id;
+            $authKey = $this->AuthKey->find(
+                'first',
+                ['conditions' => $conditions,
+                'recursive'=> 1
+                ]
+            );
+            // update the key with the source IP
+            if ($authKey) {
+                $authKey['AuthKey']['allowed_ips'] = $ip;
+                $this->AuthKey->save($authKey, ['fieldList' => ['allowed_ips']]);
+                $this->Flash->success(__('IP address set as allowed source for the Key.'));
+            } else {
+                $this->Flash->error(__('Failed to set IP as source'));
+            }
+        }
+        $this->redirect($this->referer());
+        // $this->redirect(['controller' => 'auth_keys', 'view' => 'index']);
+    }
+
     /**
      * Return conditions according to current user permission.
      * @return array
@@ -179,9 +232,17 @@ class AuthKeysController extends AppController
     {
         $user = $this->Auth->user();
         if ($user['Role']['perm_site_admin']) {
-            $conditions = []; // site admin can see all keys
+            $conditions = []; // site admin can see/edit all keys
         } else if ($user['Role']['perm_admin']) {
             $conditions['AND'][]['User.org_id'] = $user['org_id']; // org admin can see his/her user org auth keys
+            $siteAdminRoleIds = $this->AuthKey->User->Role->find('list', [
+                'recursive' => -1,
+                'fields' => ['Role.id', 'Role.id'],
+                'conditions' => ['Role.perm_site_admin' => true],
+            ]);
+            if (!empty($siteAdminRoleIds)) {
+                $conditions['AND'][]['User.role_id NOT IN'] = array_keys($siteAdminRoleIds);
+            }
         } else {
             $conditions['AND'][]['User.id'] = $user['id'];
         }

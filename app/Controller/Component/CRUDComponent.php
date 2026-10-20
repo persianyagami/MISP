@@ -25,6 +25,7 @@ class CRUDComponent extends Component
             }
             $options['filters'][] = 'quickFilter';
         }
+        $this->Controller->{$this->Controller->modelClass}->includeAnalystData = true;
         $params = $this->Controller->IndexFilter->harvestParameters(empty($options['filters']) ? [] : $options['filters']);
         $query = [];
         $query = $this->setFilters($params, $query);
@@ -35,10 +36,16 @@ class CRUDComponent extends Component
         if (!empty($options['conditions'])) {
             $query['conditions']['AND'][] = $options['conditions'];
         }
+        if (!empty($options['order'])) {
+            $query['order'] = $options['order'];
+        } else if (!empty($this->Controller->paginate['order'])) {
+            $query['order'] = $this->Controller->paginate['order'];
+        }
         if ($this->Controller->IndexFilter->isRest()) {
             if (!empty($this->Controller->paginate['fields'])) {
                 $query['fields'] = $this->Controller->paginate['fields'];
             }
+            $query['includeAnalystData'] = true;
             $data = $this->Controller->{$this->Controller->modelClass}->find('all', $query);
             if (isset($options['afterFind'])) {
                 if (is_callable($options['afterFind'])) {
@@ -49,6 +56,7 @@ class CRUDComponent extends Component
             }
             $this->Controller->restResponsePayload = $this->Controller->RestResponse->viewData($data, 'json');
         } else {
+            $query['includeAnalystData'] = true;
             $this->Controller->paginate = $query;
             $data = $this->Controller->paginate();
             if (isset($options['afterFind'])) {
@@ -66,10 +74,14 @@ class CRUDComponent extends Component
     {
         $modelName = $this->Controller->modelClass;
         $data = [];
-        if ($this->Controller->request->is('post')) {
+        if ($this->Controller->request->is('post') || $this->Controller->request->is('put')) {
             $input = $this->Controller->request->data;
-            if (empty($input[$modelName])) {
+            if (empty($input[$modelName]) || !is_array($input[$modelName])) {
                 $input = [$modelName => $input];
+            } else {
+                // A flat body can survive alongside the model's own block, for instance when the
+                // controller promotes harvested parameters into it. The block is the record.
+                $input = [$modelName => $input[$modelName]];
             }
             if (!empty($params['override'])) {
                 foreach ($params['override'] as $field => $value) {
@@ -90,9 +102,11 @@ class CRUDComponent extends Component
             }
             /** @var Model $model */
             $model = $this->Controller->{$modelName};
-            if ($model->save($data)) {
+            $model->create();
+            $savedData = $model->save($data);
+            if ($savedData) {
                 if (isset($params['afterSave'])) {
-                    $params['afterSave']($data);
+                    $params['afterSave']($savedData);
                 }
                 $data = $model->find('first', [
                     'recursive' => -1,
@@ -100,15 +114,11 @@ class CRUDComponent extends Component
                         'id' => $model->id
                     ]
                 ]);
-                if (!empty($params['saveModelVariable'])) {
-                    foreach ($params['saveModelVariable'] as $var) {
-                        if (isset($model->$var)) {
-                            $data[$modelName][$var] = $model->$var;
-                        }
-                    }
+                if (empty($data)) {
+                    throw new Exception("Something went wrong, saved data not found in database.");
                 }
                 if (isset($params['afterFind'])) {
-                    $data = $params['afterFind']($data);
+                    $data = $params['afterFind']($data, $savedData);
                 }
                 $message = __('%s added.', $modelName);
                 if ($this->Controller->IndexFilter->isRest()) {
@@ -117,7 +127,7 @@ class CRUDComponent extends Component
                     $this->Controller->Flash->success($message);
                     if (!empty($params['displayOnSuccess'])) {
                         $this->Controller->set('entity', $data);
-                        $this->Controller->set('referer', $this->Controller->referer());
+                        $this->Controller->set('referer', $this->Controller->referer(['action' => 'view', $model->id], true));
                         $this->Controller->render($params['displayOnSuccess']);
                         return;
                     }
@@ -139,7 +149,7 @@ class CRUDComponent extends Component
                     }
                 }
             } else {
-                $message = __('%s could not be added.', $modelName);
+                $message = __('%s could not be added. Errors %s', $modelName, implode(', ', Hash::flatten($model->validationErrors)));
                 if ($this->Controller->IndexFilter->isRest()) {
                     $controllerName = $this->Controller->params['controller'];
                     $actionName = $this->Controller->params['action'];
@@ -180,6 +190,12 @@ class CRUDComponent extends Component
             $data = $params['afterFind']($data);
         }
         if ($this->Controller->request->is('post') || $this->Controller->request->is('put')) {
+            // The record loaded above is the only row this edit is authorised to touch.
+            // Capture its primary key now so a payload-supplied id cannot later redirect
+            // save() onto a different row: CakePHP treats an id in the save data as an
+            // UPDATE target, so without this an injected id would mass-assign the write
+            // onto an arbitrary record (the scope/auth check only validated this one).
+            $massAssignSafeId = isset($data[$modelName]['id']) ? $data[$modelName]['id'] : null;
             $input = $this->Controller->request->data;
             if (empty($input[$modelName])) {
                 $input = [$modelName => $input];
@@ -200,10 +216,15 @@ class CRUDComponent extends Component
                     $data[$modelName][$field] = $fieldData;
                 }
             }
+            // Re-pin the primary key to the loaded record: never let a payload-supplied
+            // id move this write off the authorised row.
+            if ($massAssignSafeId !== null) {
+                $data[$modelName]['id'] = $massAssignSafeId;
+            }
             if (isset($params['beforeSave'])) {
                 $data = $params['beforeSave']($data);
             }
-            if ($model->save($data)) {
+            if ($data = $model->save($data)) {
                 if (isset($params['afterSave'])) {
                     $params['afterSave']($data);
                 }
@@ -234,6 +255,8 @@ class CRUDComponent extends Component
         if (empty($id)) {
             throw new NotFoundException(__('Invalid %s.', $modelName));
         }
+        $this->Controller->{$modelName}->includeAnalystData = true;
+        $this->Controller->{$modelName}->includeAnalystDataRecursive = true;
         $query = [
             'recursive' => -1,
             'conditions' => [$modelName . '.id' => $id],
@@ -287,20 +310,40 @@ class CRUDComponent extends Component
                 }
             }
         }
-        if ($validationError === null && $this->Controller->request->is('post') || $this->Controller->request->is('delete')) {
+        if (isset($params['afterFind'])) {
+            $data = $params['afterFind']($data);
+        }
+        if (isset($params['beforeDelete'])) {
+            $data = $params['beforeDelete']($data);
+            if (empty($data)) {
+                throw new MethodNotAllowedException('Something went wrong, delete action failed.');
+            }
+        }
+        if ($validationError === null && ($this->Controller->request->is('post') || $this->Controller->request->is('delete'))) {
             if (!empty($params['modelFunction'])) {
                 $result = $this->Controller->$modelName->{$params['modelFunction']}($id);
             } else {
                 $result = $this->Controller->{$modelName}->delete($id);
             }
             if ($result) {
+                if (isset($params['afterDelete']) && is_callable($params['afterDelete'])) {
+                    $params['afterDelete']($data);
+                }
                 $message = __('%s deleted.', $modelName);
                 if ($this->Controller->IndexFilter->isRest()) {
                     $this->Controller->restResponsePayload = $this->Controller->RestResponse->saveSuccessResponse($modelName, 'delete', $id, 'json', $message);
                     return;
                 } else {
                     $this->Controller->Flash->success($message);
-                    $this->Controller->redirect($this->Controller->referer());
+                    $redirect = isset($params['redirect']) ? $params['redirect'] : ['action' => 'index'];
+                    if (!empty($params['redirect_controller'])) {
+                        if (is_array($redirect)) {
+                            $redirect['controller'] = $params['redirect_controller'];
+                        } else {
+                            $redirect = '/' . $params['redirect_controller'] . '/' . $redirect;
+                        }
+                    }
+                    $this->Controller->redirect($this->Controller->referer($redirect));
                 }
             }
         }
@@ -333,7 +376,9 @@ class CRUDComponent extends Component
                 if ($filter === 'quickFilter') {
                     continue;
                 }
-                if (strlen(trim($filterValue, '%')) === strlen($filterValue)) {
+                if (is_array($filterValue)) {
+                    $query['conditions']['AND'][] = [$filter => $filterValue];
+                } else if (strlen(trim($filterValue, '%')) === strlen($filterValue)) {
                     $query['conditions']['AND'][] = [$filter => $filterValue];
                 } else {
                     $query['conditions']['AND'][] = [$filter . ' LIKE' => $filterValue];

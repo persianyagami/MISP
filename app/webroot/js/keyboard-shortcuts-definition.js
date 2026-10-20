@@ -32,6 +32,13 @@ function getShortcutsDefinition(controller, action) {
             }
         });
         shortcuts.push({
+            "key": "i",
+            "description": "Open the import choice modal",
+            "action": function () {
+                $('#import-button').click();
+            }
+        });
+        shortcuts.push({
             "key": "f",
             "description": "Open the freetext import modal",
             "action": function () {
@@ -43,6 +50,13 @@ function getShortcutsDefinition(controller, action) {
             "description": "Add an attribute",
             "action": function () {
                 $('#create-button').click();
+            }
+        });
+        shortcuts.push({
+            "key": "o",
+            "description": "Add an object",
+            "action": function () {
+                $('#object-button').click();
             }
         });
         shortcuts.push({

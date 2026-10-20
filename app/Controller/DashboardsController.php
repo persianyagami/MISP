@@ -12,17 +12,20 @@ class DashboardsController extends AppController
     public function beforeFilter()
     {
         parent::beforeFilter();
-        $this->Security->unlockedActions = array_merge(array('renderWidget', 'getForm'), $this->Security->unlockedActions);
+        $this->Security->unlockedActions[] = 'renderWidget';
+        $this->Security->unlockedActions[] = 'getForm';
+        if ($this->request->action === 'renderWidget') {
+            $this->Security->doNotGenerateToken = true;
+        }
     }
 
     public $paginate = array(
-            'limit' => 60,
-            'maxLimit' => 9999
+        'limit' => 60,
+        'maxLimit' => 9999
     );
 
     public function index($template_id = false)
     {
-        $this->loadModel('UserSetting');
         if (empty($template_id)) {
             $params = array(
                 'conditions' => array(
@@ -30,7 +33,7 @@ class DashboardsController extends AppController
                     'UserSetting.setting' => 'dashboard'
                 )
             );
-            $userSettings = $this->UserSetting->find('first', $params);
+            $userSettings = $this->User->UserSetting->find('first', $params);
         } else {
             $dashboardTemplate = $this->Dashboard->getDashboardTemplate($this->Auth->user(), $template_id);
             if (empty($dashboardTemplate)) {
@@ -80,28 +83,32 @@ class DashboardsController extends AppController
                 // continue, we just don't load the widget
             }
         }
-        $this->layout = 'dashboard';
         $this->set('widgets', $widgets);
     }
 
     public function getForm($action = 'edit')
     {
-        if ($this->request->is('post') || $this->request->is('put')) {
+        if ($this->request->is(['post', 'put'])) {
             $data = $this->request->data;
-            if ($action === 'edit' && !isset($data['widget'])) {
-                throw new InvalidArgumentException(__('No widget name passed.'));
-            }
             if (empty($data['config'])) {
                 $data['config'] = '';
             }
+            if (!empty($data['id']) && !preg_match('/^[\w\d_]+$/i', $data['id'])) {
+                throw new BadRequestException(__('Invalid widget id provided.'));
+            }
             if ($action === 'add') {
                 $data['widget_options'] = $this->Dashboard->loadAllWidgets($this->Auth->user());
-            } else {
+            } else if ($action === 'edit') {
+                if (!isset($data['widget'])) {
+                    throw new BadRequestException(__('No widget name passed.'));
+                }
                 $dashboardWidget = $this->Dashboard->loadWidget($this->Auth->user(), $data['widget']);
                 $data['description'] = empty($dashboardWidget->description) ? '' : $dashboardWidget->description;
                 $data['params'] = empty($dashboardWidget->params) ? array() : $dashboardWidget->params;
                 $data['params'] = array_merge($data['params'], array('widget_config' => __('Configuration of the widget that will be passed to the render. Check the view for more information')));
                 $data['params'] = array_merge(array('alias' => __('Alias to use as the title of the widget')), $data['params']);
+            } else {
+                throw new BadRequestException(__('Invalid action provided, just add or edit is supported.'));
             }
             $this->set('data', $data);
             $this->layout = false;
@@ -112,22 +119,20 @@ class DashboardsController extends AppController
     public function updateSettings()
     {
         if ($this->request->is('post')) {
-            $this->UserSetting = ClassRegistry::init('UserSetting');
             if (!isset($this->request->data['Dashboard']['value'])) {
                 throw new InvalidArgumentException(__('No setting data found.'));
             }
             $data = array(
                 'UserSetting' => array(
-                    'user_id' => $this->Auth->user('id'),
                     'setting' => 'dashboard',
                     'value' => $this->request->data['Dashboard']['value']
                 )
             );
-            $result = $this->UserSetting->setSetting($this->Auth->user(), $data);
+            $result = $this->User->UserSetting->setSetting($this->Auth->user(), $data);
             if ($result) {
                 return $this->RestResponse->saveSuccessResponse('Dashboard', 'updateSettings', false, false, __('Settings updated.'));
             }
-            return $this->RestResponse->saveFailResponse('Dashboard', 'updateSettings', false, $this->UserSetting->validationErrors, $this->response->type());
+            return $this->RestResponse->saveFailResponse('Dashboard', 'updateSettings', false, $this->User->UserSetting->validationErrors, $this->response->type());
         }
     }
 
@@ -150,11 +155,11 @@ class DashboardsController extends AppController
 
     public function renderWidget($widget_id, $force = false)
     {
+        $user = $this->_closeSession();
+
         if (!$this->request->is('post')) {
             throw new MethodNotAllowedException(__('This endpoint can only be reached via POST requests.'));
         }
-
-        @session_write_close(); // allow concurrent AJAX requests (session hold lock by default)
 
         if (empty($this->request->data['data'])) {
             $this->request->data = array('data' => $this->request->data);
@@ -163,30 +168,39 @@ class DashboardsController extends AppController
             throw new MethodNotAllowedException(__('You need to specify the widget to use along with the configuration.'));
         }
         $value = $this->request->data['data'];
-        $valueConfig = json_decode($value['config'], true);
-        $dashboardWidget = $this->Dashboard->loadWidget($this->Auth->user(), $value['widget']);
+        $valueConfig = $this->_jsonDecode($value['config']);
+        $dashboardWidget = $this->Dashboard->loadWidget($user, $value['widget']);
 
-        $redis = $this->Dashboard->setupRedis();
-        $org_scope = $this->_isSiteAdmin() ? 0 : $this->Auth->user('org_id');
-        $lookup_hash = hash('sha256', $value['widget'] . $value['config']);
-        $cacheKey = 'misp:dashboard:' . $org_scope . ':' . $lookup_hash;
-        $data = $redis->get($cacheKey);
-        if (!isset($dashboardWidget->cacheLifetime)) {
-            $dashboardWidget->cacheLifetime = false;
-        }
-        if (empty($dashboardWidget->cacheLifetime) || empty($data)) {
-            $data = $dashboardWidget->handler($this->Auth->user(), $valueConfig);
-            if (!empty($dashboardWidget->cacheLifetime)) {
-                $redis->setex($cacheKey, $dashboardWidget->cacheLifetime, json_encode(array('data' => $data)));
+        $cacheLifetime = $dashboardWidget->cacheLifetime ?? false;
+        if ($cacheLifetime !== false) {
+            $orgScope = $this->_isSiteAdmin() ? 0 : $user['org_id'];
+            $lookupHash = sha1($value['widget'] . $value['config'], true);
+            $cacheKey = "misp:dashboard:$orgScope:$lookupHash";
+
+            $redis = RedisTool::init();
+            $data = $redis->get($cacheKey);
+            if (!empty($data)) {
+                $data = RedisTool::deserialize($data);
+            } else {
+                $data = $dashboardWidget->handler($user, $valueConfig);
+                $redis->setex($cacheKey, $cacheLifetime, RedisTool::serialize($data));
             }
         } else {
-            $data = json_decode($data, true)['data'];
+            $data = $dashboardWidget->handler($user, $valueConfig);
         }
+        $renderer = method_exists($dashboardWidget, 'getRenderer') ? $dashboardWidget->getRenderer($valueConfig) : $dashboardWidget->render;
         $config = array(
-            'render' => $dashboardWidget->render,
+            'render' => $renderer,
             'autoRefreshDelay' => empty($dashboardWidget->autoRefreshDelay) ? false : $dashboardWidget->autoRefreshDelay,
             'widget_config' => empty($valueConfig['widget_config']) ? array() : $valueConfig['widget_config']
         );
+
+        if (!empty($this->request->params['named']['exportjson'])) {
+            return $this->RestResponse->viewData($data);
+        } else if (!empty($this->request->params['named']['exportcsv'])) {
+            $csv = $this->_dataToCsv($data);
+            return $this->RestResponse->viewData($csv, 'text/csv', false, true);
+        }
 
         $this->layout = false;
         $this->set('title', $dashboardWidget->title);
@@ -194,6 +208,81 @@ class DashboardsController extends AppController
         $this->set('data', $data);
         $this->set('config', $config);
         $this->render('widget_loader');
+    }
+
+    /**
+     * Flatten a widget's `handler()` return into a CSV string for the
+     * renderWidget exportcsv branch.
+     */
+    private function _dataToCsv($data)
+    {
+        $toConvert = !empty($data) ? (!empty($data['data']) ? $data['data'] : $data) : array();
+        if (empty($toConvert)) {
+            return '';
+        }
+        $firstKey = key($toConvert);
+        if (is_string($firstKey)) {
+            $rows = array();
+            foreach ($toConvert as $k => $v) {
+                // Both halves are attacker-reachable: widgets key their
+                // payload on tag names (TrendingTagsWidget) and on raw
+                // Attribute.value1 (TrendingAttributesWidget), so a value
+                // carrying a comma, a quote or a newline used to split the
+                // row into extra columns. Quote only where the field needs
+                // it, so anything that parsed correctly before is still
+                // byte-identical.
+                // Strings carry their own text - CSV quoting replaces the
+                // JSON quoting v1 gave them, so a consumer parses the same
+                // value out. Everything else keeps its JSON encoding, so
+                // 1 / true / null / {..} are unchanged.
+                $encoded = is_string($v) ? $v : json_encode($v);
+                $rows[] = $this->_csvField($k, false) . ',' . $this->_csvField($encoded, false);
+            }
+            return implode(PHP_EOL, $rows) . PHP_EOL;
+        }
+        $headerKeys = array_keys(Hash::flatten($toConvert[0]));
+        // This branch already wrapped every field, but never doubled an
+        // embedded quote, so a tag name containing `"` broke out of its
+        // own field and desynced the header from the rows. Keep the
+        // always-quote convention and make it correct.
+        $header = implode(',', array_map(function ($s) { return $this->_csvField($s, true); }, $headerKeys));
+        $rows = array_map(function ($row) {
+            $flat = array_values(Hash::flatten($row));
+            return implode(',', array_map(function ($s) { return $this->_csvField($s, true); }, $flat));
+        }, $toConvert);
+        return $header . PHP_EOL . implode(PHP_EOL, array_values($rows)) . PHP_EOL;
+    }
+
+    /**
+     * Render one RFC 4180 CSV field.
+     *
+     * `$alwaysQuote` preserves each caller's existing convention rather
+     * than imposing one: the associative branch never quoted, so it
+     * quotes only when the field would otherwise corrupt the row, and
+     * the tabular branch always quoted, so it still does. Output is
+     * therefore unchanged for every payload that was not already
+     * mis-parsing.
+     *
+     * Deliberately does NOT neutralise spreadsheet formula prefixes
+     * (`=`, `+`, `-`, `@`, CWE-1236). Widget CSV carries raw indicator
+     * values, and prefixing them with an apostrophe would corrupt the
+     * data for the tooling that ingests it - see the V15 entry in the
+     * tracker for the full rationale.
+     */
+    private function _csvField($value, $alwaysQuote)
+    {
+        if (is_array($value)) {
+            // Hash::flatten leaves empty arrays in place; strval() turned
+            // those into the literal string "Array" plus a PHP warning.
+            $value = json_encode($value);
+        }
+        // Otherwise cast exactly as strval() did, so booleans and nulls
+        // keep the bytes v1 emitted for them.
+        $value = (string)$value;
+        if (!$alwaysQuote && strpbrk($value, "\",\r\n") === false) {
+            return $value;
+        }
+        return '"' . str_replace('"', '""', $value) . '"';
     }
 
     public function import()
@@ -236,7 +325,6 @@ class DashboardsController extends AppController
 
     public function saveTemplate($update = false)
     {
-        $this->loadModel('UserSetting');
         if (!empty($update)) {
             $conditions = array('Dashboard.id' => $update);
             if (Validation::uuid($update)) {
@@ -259,7 +347,7 @@ class DashboardsController extends AppController
             }
             $data = $this->request->data;
             if (empty($update)) { // save the template stored in user setting and make it persistent
-                $data['value'] = $this->UserSetting->getSetting($this->Auth->user('id'), 'dashboard');
+                $data['value'] = $this->User->UserSetting->getSetting($this->Auth->user('id'), 'dashboard');
             }
             $result = $this->Dashboard->saveDashboardTemplate($this->Auth->user(), $data, $update);
             if ($this->_isRest()) {
@@ -278,7 +366,6 @@ class DashboardsController extends AppController
         } else {
             $this->layout = false;
         }
-        $this->loadModel('User');
         $permFlags = array(0 => __('Unrestricted'));
         foreach ($this->User->Role->permFlags as $perm_flag => $perm_data) {
             $permFlags[$perm_flag] = $perm_data['text'];
@@ -316,6 +403,8 @@ class DashboardsController extends AppController
     public function listTemplates()
     {
         $conditions = array();
+        // load all widgets for internal use, won't be displayed to the user. Thus we circumvent the ACL on it.
+        $accessible_widgets = array_keys($this->Dashboard->loadAllWidgets($this->Auth->user()));
         if (!$this->_isSiteAdmin()) {
             $permission_flags = array();
             foreach ($this->Auth->user('Role') as $perm => $value) {
@@ -341,10 +430,19 @@ class DashboardsController extends AppController
                                     array('Dashboard.restrict_to_role_id' => 0)
                                 )
                             ),
+                            // 'unrestricted' has to be matched as a STRING.
+                            // restrict_to_permission_flag is a varchar, so
+                            // comparing it against the integer 0 makes MySQL
+                            // coerce the column: 'perm_site_admin' = 0 is TRUE,
+                            // and the whole clause becomes a no-op. The two
+                            // values that actually mean unrestricted are the
+                            // column default '' and the '0' the save form
+                            // posts - which is exactly what the !empty() test
+                            // in Dashboard::getDashboardTemplate() accepts.
                             array(
                                 'OR' => array(
                                     array('Dashboard.restrict_to_permission_flag' => $permission_flags),
-                                    array('Dashboard.restrict_to_permission_flag' => 0)
+                                    array('Dashboard.restrict_to_permission_flag' => array('', '0'))
                                 )
                             )
                         )
@@ -394,6 +492,15 @@ class DashboardsController extends AppController
                 }
                 $element['Dashboard']['widgets'] = array_keys($widgets);
                 sort($element['Dashboard']['widgets']);
+                $temp = [];
+                foreach ($element['Dashboard']['widgets'] as $widget) {
+                    if (in_array($widget, $accessible_widgets)) {
+                        $temp['allow'][] = $widget;
+                    } else {
+                        $temp['deny'][] = $widget;
+                    }
+                }
+                $element['Dashboard']['widgets'] = $temp;
                 if ($element['Dashboard']['user_id'] != $this->Auth->user('id')) {
                     $element['User']['email'] = '';
                 }

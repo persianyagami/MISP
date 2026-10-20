@@ -48,6 +48,10 @@
             }
         ?>
         <div id="page1_content" class="multi-page-form-div tabContent" style="width:544px;">
+            <?php if ($canModifyUuid): ?>
+            <label for="SharingGroupUuid"><?php echo __('UUID');?></label>
+            <input type="text" class="input-xxlarge" placeholder="<?= __('If not provided, random UUID will be generated') ?>" id="SharingGroupUuid">
+            <?php endif; ?>
             <label for="SharingGroupName"><?php echo __('Name');?></label>
             <input type="text" class="input-xxlarge" placeholder="<?php echo __('Example: Multinational sharing group');?>" id="SharingGroupName">
             <label for="SharingGroupReleasability"><?php echo __('Releasable to');?></label>
@@ -121,22 +125,28 @@
 <script type="text/javascript">
     var lastPage = 4;
     var roaming = false;
-    var organisations = [{
-        id: '<?php echo h($user['Organisation']['id'])?>',
-        type: 'local',
-        name: '<?php echo h($user['Organisation']['name'])?>',
-        extend: true,
-        uuid: '',
-        removable: 0
-    }];
-    var orgids = ['<?php echo h($user['Organisation']['id'])?>'];
-    var servers = [{
-        id: '0',
-        name: '<?php echo __('Local instance');?>',
-        url: '<?php echo h($localInstance); ?>',
-        all_orgs: false,
-        removable: 0
-    }];
+    <?php
+        $org_json = json_encode([[
+            'id' => h($user['Organisation']['id']),
+            'type' => 'local',
+            'name' => h($user['Organisation']['name']),
+            'extend' => true,
+            'uuid' => '',
+            'removable' => 0
+        ]]);
+    ?>
+    var organisations = <?= $org_json ?>;
+    var orgids = ['<?= h($user['Organisation']['id'])?>'];
+    <?php
+        $server_json = json_encode([[
+            'id' => '0',
+            'name' => __('Local instance'),
+            'url' => h(Configure::read('MISP.baseurl')),
+            'all_orgs' => false,
+            'removable' => 0
+        ]]);
+    ?>
+    var servers = <?= $server_json ?>;
     var serverids = [0];
     $(function() {
         if ($('#SharingGroupJson').val()) sharingGroupPopulateFromJson();

@@ -100,7 +100,7 @@ Search MISP using a list of filter parameters and return the data in the selecte
 | Name |Type |Description |
 | -- |-- |-- |
 | page |integer |Page number for the pagination |
-| limit |integer |Limit on the pagination |
+| limit |integer |Limit on the pagination. Lower bounded by the one set for your role|
 | value |string | |
 | type |string |The type of the attribute |
 | category |string | |
@@ -293,7 +293,7 @@ Search MISP using a list of filter parameters and return the data in the selecte
 | Name |Type |Description |
 | -- |-- |-- |
 | page |integer |Page number for the pagination |
-| limit |integer |Limit on the pagination |
+| limit |integer |Limit on the pagination. Lower bounded by the one set for your role |
 | value |string | |
 | type |string |The type of the attribute |
 | category |string | |
@@ -435,7 +435,7 @@ POST a MISP Feed descriptor JSON to this API to add a Feed.
 | delta_merge |integer |Merge attributes (only add new attribute, remove revoked attributes) |
 | distribution |integer | |
 | sharing_group_id |integer | |
-| tag_id |integer |A tad ID to attach to created events |
+| tag_id |integer |A tag ID to attach to created events |
 | pull_rules |string |Not supported |
 | rules |string |Not supported |
 | event_id |integer | |
@@ -472,7 +472,7 @@ POST a MISP Feed descriptor JSON to this API to edit a Feed.
 | delta_merge |integer |Merge attributes (only add new attribute, remove revoked attributes) |
 | distribution |integer | |
 | sharing_group_id |integer | |
-| tag_id |integer |A tad ID to attach to created events |
+| tag_id |integer |A tag ID to attach to created events |
 | pull_rules |string |Not supported |
 | rules |string |Not supported |
 | event_id |integer | |
@@ -559,7 +559,7 @@ Search MISP using a list of filter parameters and return the data in the selecte
 | Name |Type |Description |
 | -- |-- |-- |
 | page |integer |Page number for the pagination |
-| limit |integer |Limit on the pagination |
+| limit |integer |Limit on the pagination. Lower bounded by the one set for your role |
 | id |integer | |
 | uuid |string | |
 | galaxy_id | | |
@@ -659,7 +659,7 @@ Simply run a get request on this endpoint to get the relevant log entries for a 
 
 # Organisations
 ## Add
-POST an Organisation object in JSON format to this API to create a new organsiation.
+POST an Organisation object in JSON format to this API to create a new organisation.
 ```
 /admin/organisations/add
 ```
@@ -683,7 +683,7 @@ POST an Organisation object in JSON format to this API to create a new organsiat
 | local |integer |If the organisation should have access to this instance, make sure that the Local organisation setting is checked. If you would only like to add a known external organisation for inclusion in sharing groups, uncheck the Local organisation setting. |
 
 ## Edit
-POST an Organisation object in JSON format to this API to create a new organsiation.
+POST an Organisation object in JSON format to this API to create a new organisation.
 ```
 /admin/organisations/edit
 ```
@@ -997,7 +997,7 @@ Untag an event or attribute. Tag can be the id or the name.
 
 
 ## AttachTagToObject
-Attach a Tag to an object, refenced by an UUID. Tag can either be a tag id or a tag name.
+Attach a Tag to an object, referenced by an UUID. Tag can either be a tag id or a tag name.
 ```
 /tags/attachTagToObject
 ```

@@ -7,16 +7,16 @@
     Tested fully working without SELinux by [@SteveClement](https://twitter.com/SteveClement) on 20210401
     TODO: Fix SELinux permissions, *pull-requests welcome*.
 
-{!generic/manual-install-notes.md!}
+{% include_relative generic/manual-install-notes.md %}
 
 !!! notice
-    If the next line is `[!generic/community.md!]()` [click here](https://misp.github.io/MISP/INSTALL.rhel7/).
+    If the next line is `[!generic/community.md!]()` [click here](https://misp.github.io/MISP/INSTALL.rhel7).
 
-{!generic/community.md!}
+{% include_relative generic/community.md %}
 
 ### 0/ Overview and Assumptions
 
-{!generic/rhelVScentos.md!}
+{% include_relative generic/rhelVScentos.md %}
 
 !!! warning
     The core MISP team cannot easily verify if this guide is working or not. Please help us in keeping it up to date and accurate.
@@ -26,7 +26,7 @@
     Maintenance for CentOS 7 will end on: June 30th, 2024 [Source[0]](https://wiki.centos.org/About/Product) [Source[1]](https://linuxlifecycle.com/)
     CentOS 7-1908 [NetInstallURL](http://mirror.centos.org/centos/7/os/x86_64/)
 
-{!generic/manual-install-notes.md!}
+{% include_relative generic/manual-install-notes.md %}
 
 This document details the steps to install MISP on Red Hat Enterprise Linux 7.x (RHEL 7.x) and CentOS 7.x.
 This is a joint RHEL/CentOS install guide. The authors tried to make it contextually evident what applies to which flavor.
@@ -38,7 +38,7 @@ The following assumptions with regard to this installation have been made.
 - This system will have direct or proxy access to the Internet for updates. Or connected to a Red Hat Satellite Server
 - This document will bootstrap a MISP instance running over HTTPS. A full test of all features have yet to be done. [The following GitHub issue](https://github.com/MISP/MISP/issues/4084) details some shortcomings.
 
-{!generic/globalVariables.md!}
+{% include_relative generic/globalVariables.md %}
 
 !!! note
     For fresh installs the following tips might be handy.<br />
@@ -219,6 +219,7 @@ installCoreRHEL7 () {
   cd $PATH_TO_MISP
 
   # Fetch submodules
+  $SUDO_WWW git submodule sync
   $SUDO_WWW git submodule update --init --recursive
   # Make git ignore filesystem permission differences for submodules
   $SUDO_WWW git submodule foreach --recursive git config core.filemode false
@@ -236,6 +237,9 @@ installCoreRHEL7 () {
   # If you umask is has been changed from the default, it is a good idea to reset it to 0022 before installing python modules
   UMASK=$(umask)
   umask 0022
+
+  # install python-stix dependencies
+  $SUDO_WWW $PATH_TO_MISP/venv/bin/pip install ordered-set python-dateutil six weakrefmethod
 
   # install zmq
   $SUDO_WWW $PATH_TO_MISP/venv/bin/pip install -U zmq
@@ -407,7 +411,9 @@ apacheConfig_RHEL7 () {
   #sudo sed -i "s/SetHandler/\#SetHandler/g" /etc/httpd/conf.d/misp.ssl.conf
   sudo rm /etc/httpd/conf.d/ssl.conf
   sudo chmod 644 /etc/httpd/conf.d/misp.ssl.conf
+  if ! grep -x "Listen 443" /etc/httpd/conf/httpd.conf; then
   sudo sed -i '/Listen 80/a Listen 443' /etc/httpd/conf/httpd.conf
+  fi
 
   # If a valid SSL certificate is not already created for the server, create a self-signed certificate:
   echo "The Common Name used below will be: ${OPENSSL_CN}"
@@ -629,19 +635,19 @@ configWorkersRHEL () {
 # <snippet-end 3_configWorkers_RHEL.sh>
 ```
 
-{!generic/MISP_CAKE_init.md!}
+{% include_relative generic/MISP_CAKE_init.md %}
 
-{!generic/misp-modules-centos.md!}
+{% include_relative generic/misp-modules-rhel.md %}
 
-{!generic/misp-modules-cake.md!}
+{% include_relative generic/misp-modules-cake.md %}
 
-{!generic/misp-dashboard-centos.md!}
+{% include_relative generic/misp-dashboard-rhel.md %}
 
-{!generic/misp-dashboard-cake.md!}
+{% include_relative generic/misp-dashboard-cake.md %}
 
-{!generic/INSTALL.done.md!}
+{% include_relative generic/INSTALL.done.md %}
 
-{!generic/recommended.actions.md!}
+{% include_relative generic/recommended.actions.md %}
 
 ### 11/ Known Issues
 ## 11.01/ Workers cannot be started or restarted from the web page
@@ -654,5 +660,4 @@ systemctl restart misp-workers.service
     No other functions were tested after the conclusion of this install. There may be issue that aren't addressed<br />
     via this guide and will need additional investigation.
 
-{!generic/hardening.md!}
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               
+{% include_relative generic/hardening.md %}
